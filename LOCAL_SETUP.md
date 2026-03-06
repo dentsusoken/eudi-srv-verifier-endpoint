@@ -12,16 +12,13 @@
 
 ```
 <working directory>/
-├── eudi-srv-issuer-oidc-py/
-│   └── script/
-│       ├── setup-certs.sh          ← run first
-│       └── certs/
-│           ├── trusted_cas/        ← IACA_UT.pem (used by setup-verifier-certs.sh)
-│           └── privKey/
 ├── eudi-srv-verifier-endpoint/
 │   └── scripts/
 │       └── setup-verifier-certs.sh
 ├── eudi-web-verifier/
+│   ├── patches/                    ← patch files for local overrides
+│   └── scripts/
+│       └── patch_academic_credit.sh
 └── eudi-app-ios-wallet-ui/
 ```
 
@@ -56,10 +53,11 @@ cd eudi-srv-verifier-endpoint
 
 ### Register issuer chain in Verifier UI
 
-Start the verifier UI and open it in a browser:
+Generate local override files and start the verifier UI:
 
 ```bash
 cd eudi-web-verifier
+bash scripts/patch_academic_credit.sh
 npm run config && npx ng serve --configuration local
 ```
 
