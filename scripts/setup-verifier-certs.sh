@@ -6,8 +6,8 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-IACA_CERT="$HOME/work/vecrea-id/projects/eudi-srv-issuer-oidc-py/script/certs/trusted_cas/IACA_UT.pem"
-IACA_KEY="$HOME/work/vecrea-id/projects/eudi-srv-issuer-oidc-py/script/certs/privKey/IACA_UT_key.pem"
+IACA_CERT="$ROOT/eudi-srv-issuer-oidc-py/script/certs/trusted_cas/IACA_UT.pem"
+IACA_KEY="$ROOT/eudi-srv-issuer-oidc-py/script/certs/privKey/IACA_UT_key.pem"
 WALLET_CERT_DIR="${WALLET_DIR:-$HOME/work/eudi-app-ios-wallet-ui}/Wallet/Certificate"
 VERIFIER_RESOURCES="$SCRIPT_DIR/../src/main/resources"
 
@@ -105,8 +105,8 @@ echo "  -> $LOCAL_PROPS"
 echo ""
 echo "=== Done ==="
 echo ""
-echo "次のステップ:"
-echo "  1. Verifier バックエンドを再起動: cd $(basename "$SCRIPT_DIR"/.. ) && ./gradlew bootRun --args='--spring.profiles.active=local'"
-echo "  2. Wallet アプリをクリーンビルド: Xcode で ⌘⇧K -> ⌘R"
+echo "Next steps:"
+echo "  1. Restart the Verifier backend: cd $(basename "$SCRIPT_DIR"/.. ) && ./gradlew bootRun --args='--spring.profiles.active=local'"
+echo "  2. Clean build the wallet app: ⌘⇧K -> ⌘R in Xcode"
 echo ""
 
