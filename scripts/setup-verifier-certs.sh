@@ -6,8 +6,8 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-IACA_CERT="$ROOT/eudi-srv-issuer-oidc-py/script/certs/trusted_cas/IACA_UT.pem"
-IACA_KEY="$ROOT/eudi-srv-issuer-oidc-py/script/certs/privKey/IACA_UT_key.pem"
+IACA_CERT="$HOME/work/vecrea-id/projects/eudi-srv-issuer-oidc-py/script/certs/trusted_cas/IACA_UT.pem"
+IACA_KEY="$HOME/work/vecrea-id/projects/eudi-srv-issuer-oidc-py/script/certs/privKey/IACA_UT_key.pem"
 WALLET_CERT_DIR="${WALLET_DIR:-$HOME/work/eudi-app-ios-wallet-ui}/Wallet/Certificate"
 VERIFIER_RESOURCES="$SCRIPT_DIR/../src/main/resources"
 
@@ -72,14 +72,14 @@ openssl pkcs12 -export \
   -in "$VTMP/verifier.crt" \
   -inkey "$VTMP/verifier.key" \
   -certfile <(cat "$VTMP/intermediate.crt" "$IACA_CERT") \
-  -name verifier \
+  -name access_certificate \
   -out "$VTMP/keystore.p12" \
   -passout pass:keystore 2>/dev/null
 
 keytool -importkeystore \
   -srckeystore "$VTMP/keystore.p12" -srcstoretype PKCS12 -srcstorepass keystore \
   -destkeystore "$VTMP/keystore.jks" -deststoretype JKS \
-  -deststorepass keystore -destkeypass verifier \
+  -deststorepass keystore -destkeypass access_certificate \
   -noprompt 2>/dev/null
 
 cp "$VTMP/keystore.jks" "$VERIFIER_RESOURCES/keystore.jks"
@@ -94,10 +94,11 @@ LOCAL_PROPS="$VERIFIER_RESOURCES/application-local.properties"
 cat > "$LOCAL_PROPS" <<EOF
 verifier.originalClientId=localhost
 verifier.clientIdPrefix=x509_san_dns
-verifier.jar.signing.algorithm=ES256
+verifier.access-certificate.signing-algorithm=ES256
 verifier.requestJwt.requestUriMethod=Post
 verifier.allowedRedirectUriSchemes=http,https
 verifier.publicUrl=http://localhost:8080
+verifier.attestation-classifications={"pid":{"vcts":["urn:eudi:pid:1"],"docTypes":["eu.europa.ec.eudi.pid.1"]},"qeaa":{"vcts":[],"docTypes":[]},"pubeaa":{"vcts":[],"docTypes":[]},"eaa":[{"useCase":"academicCredit2024Fall","vcts":["urn:com:dentsusoken:academic_credit:2024:03"],"docTypes":[]},{"useCase":"academicCredit2025Spring","vcts":["urn:com:dentsusoken:academic_credit:2025:01"],"docTypes":[]},{"useCase":"universityStudentId","vcts":["https://jp.ac.example-university/vct/student-id"],"docTypes":[]}]}
 EOF
 echo "  -> $LOCAL_PROPS"
 
@@ -107,8 +108,5 @@ echo ""
 echo "次のステップ:"
 echo "  1. Verifier バックエンドを再起動: cd $(basename "$SCRIPT_DIR"/.. ) && ./gradlew bootRun --args='--spring.profiles.active=local'"
 echo "  2. Wallet アプリをクリーンビルド: Xcode で ⌘⇧K -> ⌘R"
-echo "  3. 下記の内容を Verifier UI の Configure Issuer Chain に貼り付け"
 echo ""
-echo "-------- Configure Issuer Chain --------"
-cat "$IACA_CERT"
-echo "----------------------------------------"
+

@@ -31,15 +31,6 @@ bash eudi-srv-verifier-endpoint/scripts/setup-verifier-certs.sh
 ```
 
 Generates `src/main/resources/keystore.jks` and updates `application-local.properties`.
-At the end of the output, the certificate to be registered in the Verifier UI is printed between the following markers — copy this for the next step:
-
-```
--------- Configure Issuer Chain --------
------BEGIN CERTIFICATE-----
-...
------END CERTIFICATE-----
-----------------------------------------
-```
 
 > **Note:** Requires `eudi-srv-issuer-oidc-py/script/setup-certs.sh` to have been run first (IACA certs are required).
 > If `setup-certs.sh` is re-run, `setup-verifier-certs.sh` must also be re-run (IACA key changes).
@@ -51,23 +42,19 @@ cd eudi-srv-verifier-endpoint
 ./gradlew bootRun --args='--spring.profiles.active=local'
 ```
 
-### Register issuer chain in Verifier UI
+### Start Verifier UI
 
 Generate local override files and start the verifier UI:
 
 ```bash
 cd eudi-web-verifier
-bash scripts/patch_academic_credit.sh
+bash scripts/patch_nii_demo.sh
 npm run config && npx ng serve --configuration local
 ```
 
-Open `http://localhost:4200` in a browser, select **Configure Issuer Chain** from the header menu, and paste the content of the following file into the text area:
+Open `http://localhost:4200` in a browser.
 
-```
-eudi-srv-issuer-oidc-py/script/certs/trusted_cas/IACA_UT.pem
-```
-
-> **Note:** This must be done after every `setup-verifier-certs.sh` run.
+> **Note:** Configure Issuer Chain is not required — leave it empty to trust all issuers.
 
 ### Clean build the wallet app
 
