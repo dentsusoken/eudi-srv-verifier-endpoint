@@ -28,7 +28,7 @@ import eu.europa.ec.eudi.verifier.endpoint.adapter.out.keystore.loadJWK
 import eu.europa.ec.eudi.verifier.endpoint.adapter.out.keystore.loadKeyStore
 import eu.europa.ec.eudi.verifier.endpoint.adapter.out.persistence.PresentationInMemoryRepo
 import eu.europa.ec.eudi.verifier.endpoint.adapter.out.qrcode.GenerateQrCodeFromData
-import eu.europa.ec.eudi.verifier.endpoint.adapter.out.x509.ParsePemEncodedX509CertificateChainWithNimbus
+import eu.europa.ec.eudi.verifier.endpoint.adapter.out.x509.ParsePemEncodedX509CertificatesWithNimbus
 import eu.europa.ec.eudi.verifier.endpoint.domain.*
 import eu.europa.ec.eudi.verifier.endpoint.port.input.InitTransaction
 import eu.europa.ec.eudi.verifier.endpoint.port.input.InitTransactionLive
@@ -55,7 +55,7 @@ object TestContext {
     private val generateRequestId = GenerateRequestId.fixed(testRequestId)
     private val ecJwk: ECKey = run {
         loadKeyStore(location = "classpath:keystore.jks", type = "jks", password = "keystore")
-            .loadJWK(alias = "verifier", password = "verifier")
+            .loadJWK(alias = "access_certificate", password = "access_certificate")
             .toECKey()
     }
     private val responseEncryptionOption =
@@ -73,8 +73,8 @@ object TestContext {
             ),
         ),
     )
-    private val jarSigningConfig: SigningConfig = SigningConfig(ecJwk, JWSAlgorithm.ES512)
-    val verifierId = VerifierId.X509SanDns("verifier", jarSigningConfig)
+    private val accessCertificate: AccessCertificate = AccessCertificate(ecJwk, JWSAlgorithm.ES512)
+    val verifierId = VerifierId.X509SanDns("verifier", accessCertificate)
     val createJar: CreateJarNimbus = CreateJarNimbus()
     val signedRequestObjectVerifier: JWSVerifier = ECDSAVerifier(ecJwk)
     private val repo = PresentationInMemoryRepo()
@@ -98,7 +98,7 @@ object TestContext {
             requestJarByReference,
             CreateQueryWalletResponseRedirectUri.simple("https"),
             repo.publishPresentationEvent,
-            ParsePemEncodedX509CertificateChainWithNimbus,
+            ParsePemEncodedX509CertificatesWithNimbus,
             generateQrCode,
         )
 }

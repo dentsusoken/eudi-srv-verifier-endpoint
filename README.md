@@ -110,13 +110,11 @@ variables of the service in [docker-compose.yaml](docker/docker-compose.yaml)
     environment:
       VERIFIER_PUBLICURL: "https://10.240.174.10"
       VERIFIER_RESPONSE_MODE: "DirectPost"
-      VERIFIER_JAR_SIGNING_KEY_KEYSTORE: file:///keystore.jks
+      VERIFIER_ACCESS_CERTIFICATE_KEYSTORE: file:///keystore.jks
 ```
 
-### Mount external keystore to be used with Authorization Request signing 
-When property `VERIFIER_JAR_SIGNING_KEY` is set to `LoadFromKeystore` the service can be configured (as described [here](#when-verifier_jar_signing_key-is-set-to-loadfromkeystore-the-following-environment-variables-must-also-be-configured))
-to read from a keystore the certificate used for signing authorization requests. 
-To provide an external keystore mount it to the path designated by the value of property `VERIFIER_JAR_SIGNING_KEY_KEYSTORE`.   
+### Mount external keystore to be used with Authorization Request signing  
+To provide an external keystore mount it to the path designated by the value of property `VERIFIER_ACCESS_CERTIFICATE_KEYSTORE`.   
 
 **Example:**
 ```yaml
@@ -128,7 +126,11 @@ To provide an external keystore mount it to the path designated by the value of 
     environment:
       VERIFIER_PUBLICURL: "https://10.240.174.10"
       VERIFIER_RESPONSE_MODE: "DirectPost"
-      VERIFIER_JAR_SIGNING_KEY_KEYSTORE: file:///certs/keystore.jks
+      VERIFIER_ACCESS_CERTIFICATE_KEYSTORE: file:///certs/keystore.jks
+      VERIFIER_ACCESS_CERTIFICATE_KEYSTORE_TYPE: "jks"
+      VERIFIER_ACCESS_CERTIFICATE_KEYSTORE_PASSWORD: <PASSWORD OF KEYSTORE>
+      VERIFIER_ACCESS_CERTIFICATE_ALIAS: <ALIAS OF CERTIFICATE>
+      VERIFIER_ACCESS_CERTIFICATE_PASSWORD: <PASSWORD OF CERTIFICATE>
     volumes:
       - <PATH OF KEYSTORE IN HOST MACHINE>/keystore.jks:/certs/keystore.jks
       
@@ -547,32 +549,32 @@ Description: Client Id Prefix used by the Verifier Endpoint application
 Possible values: `pre-registered`, `x509_san_dns`, `x509_hash`  
 Default value: `pre-registered`
 
-Variable: `VERIFIER_JAR_SIGNING_ALGORITHM`  
+Variable: `VERIFIER_ACCESS_CERTIFICATE_SIGNING_ALGORITHM`  
 Description: Algorithm used to sign Authorization Request   
 Possible values: Any `Algorithm Name` of an IANA registered asymmetric signature algorithm (i.e. Usage is `alg`):
 https://www.iana.org/assignments/jose/jose.xhtml#web-signature-encryption-algorithms   
 Note: The configured signing algorithm must be compatible with the configured signing key  
 Default value: `ES256`
 
-Variable: `VERIFIER_JAR_SIGNING_KEY_KEYSTORE`  
-Description: URL of the Keystore from which to load the Key to use for JAR signing  
+Variable: `VERIFIER_ACCESS_CERTIFICATE_KEYSTORE`  
+Description: URL of the Keystore from which to load the Access Certificate to use for JAR signing  
 Examples: `classpath:keystore.jks`, `file:///keystore.jks`
 
-Variable: `VERIFIER_JAR_SIGNING_KEY_KEYSTORE_TYPE`  
-Description: Type of the Keystore from which to load the Key to use for JAR signing  
+Variable: `VERIFIER_ACCESS_CERTIFICATE_KEYSTORE_TYPE`  
+Description: Type of the Keystore from which to load the Access Certificate to use for JAR signing  
 Examples: `jks`, `pkcs12`
 
-Variable: `VERIFIER_JAR_SIGNING_KEY_KEYSTORE_PASSWORD`  
-Description: Password of the Keystore from which to load the Key to use for JAR signing
+Variable: `VERIFIER_ACCESS_CERTIFICATE_KEYSTORE_PASSWORD`  
+Description: Password of the Keystore from which to load the Access Certificate to use for JAR signing  
 
-Variable: `VERIFIER_JAR_SIGNING_KEY_ALIAS`  
-Description: Alias of the Key to use for JAR signing, in the configured Keystore  
+Variable: `VERIFIER_ACCESS_CERTIFICATE_ALIAS`  
+Description: Alias of the Access Certificate to use for JAR signing, in the configured Keystore  
 
 > [!CAUTION]  
-> **The JAR signing key must be associated with a Certificate chain. The leaf Certificate cannot be self-signed.**
+> **The Access Certificate must be associated with a Certificate chain. The Access Certificate cannot be self-signed.**
 
-Variable: `VERIFIER_JAR_SIGNING_KEY_PASSWORD`  
-Description: Password of the Key to use for JAR signing, in the configured Keystore
+Variable: `VERIFIER_ACCESS_CERTIFICATE_PASSWORD`  
+Description: Password of the Access Certificate to use for JAR signing, in the configured Keystore  
 
 Variable: `VERIFIER_PUBLICURL`  
 Description: Public URL of the Verifier Endpoint application  
@@ -684,49 +686,85 @@ Variable: `CORS_MAXAGE`
 Description: Time in seconds of how long pre-flight request responses can be cached by clients  
 Default value: `3600`
 
-### Configuring trust sources
+### Configuring trust
 
-The verifier supports the configuration of multiple trust sources, that will be used to trust the issuers of presented credentials.  
-Each trust source is associated with a regex pattern, that will be used to match the trust source to an issuer, based on a credential's docType/vct.
-Each trust source can be configured with a List of Trusted Lists, a Keystore or both.
-The trust sources are configured using the environment variable `VERIFIER_TRUSTSOURCES` and are indexed starting from `0`. You can define multiple trust sources by incrementing the index (e.g., VERIFIER_TRUSTSOURCES_0_*, VERIFIER_TRUSTSOURCES_1_*, etc.)
+Verifier Endpoint verifies whether the Issuer of a Verifiable Credential is trusted or not using an external service. 
+Currently, only [eudi-srv-trust-validator](https://github.com/eu-digital-identity-wallet/eudi-srv-trust-validator) is supported.
 
-Variable: `VERIFIER_TRUSTSOURCES_0_PATTERN`
-Description: The regex pattern used to match the trust source to an issuer, based on a credential's docType/vct
-Example: `eu.europa.ec.eudi.pid.*|urn:eu.europa.ec.eudi:pid:.*`
+> [!CAUTION]
+> 
+> By default, Verifier Endpoint considers all Verifiable Credential Issuers trusted.  
+> To enable Issuer Verifiable Credential Issuers verification, configure the following environment variables.
 
-Variable: `VERIFIER_TRUSTSOURCES_0_LOTL_LOCATION`
-Description: If present, the URL of the List of Trusted Lists from which to load the X509 Certificates for this trust source
+Variable: `VERIFIER_TRUSTVALIDATOR_SERVICEURL`  
+Description: The URL of the `/trust` endpoint of the service to use for trust verification.          
+Default value: none
 
-Variable: `VERIFIER_TRUSTSOURCES_0_LOTL_REFRESHINTERVAL`
-Description: If present, a cron expression with the refresh interval of the List of Trusted Lists in seconds. If not present, the default value is `0 0 * * * * ` (every hour)
-Example: `0 0 */4 * * *`
+### Attestation Classifications
 
-Variable: `VERIFIER_TRUSTSOURCES_0_LOTL_SERVICETYPEFILTER`
-Description: If present, the service type filter to be used when loading the List of Trusted Lists. If not present, all service types are loaded. Valid values are `PIDProvider`, `QEEAProvider` and `PubEAAProvider`.
-Example: `PIDProvider`
+> [!IMPORTANT]
+>
+> Verifier Endpoint requires each Verifiable Credential be classified as:
+> * PID
+> * QEAA
+> * PubEAA
+> * EAA
+> 
+> Use the following configuration properties to configuration the classifications.
+> 
+> This information is used when checking whether the issuer of the Verifiable Credential is trusted or not.
 
-Variable: `VERIFIER_TRUSTSOURCES_0_LOTL_KEYSTORE_PATH`
-Description: If present, the URL of the Keystore which contains the public key that was used to sign the List of Trusted Lists
-Examples: `classpath:lotl-key.jks`, `file:///lotl-key.jks`
+Variable: `VERIFIER_ATTESTATIONCLASSIFICATIONS`  
+Description: JSON object that contains the identifiers (either vcts, or docTypes) per attestation class  
+Notes:
+* Each class (`pid`, `qeaa`, `pubeaa`) contains `vcts` and/or `docTypes`  
+* Each `eaa` class, corresponds to a specific `useCase` and contains `vcts` and/or `docTypes`  
+* Please ensure double quotes `"` are properly escaped in the environment variable value.  
+* More information about the JSON structure can be found in [AttestationClassifications](src/main/resources/public/openapi.json).  
 
-Variable: `VERIFIER_TRUSTSOURCES_0_LOTL_KEYSTORE_TYPE`
-Description: Type of the Keystore which contains the public key that was used to sign the List of Trusted Lists
-Examples: `jks`, `pkcs12`
+Example: `{"pid":{"vcts":["urn:eudi:pid:1"],"docTypes":["eu.europa.ec.eudi.pid.1"]},"qeaa":{"vcts":[],"docTypes":[]},"pubeaa":{"vcts":["urn:eudi:ehic:1"],"docTypes":[]},"eaa":[{"useCase":"mDL","vcts":[],"docTypes":["org.iso.18013.5.1.mDL"]},{"useCase":"learningCredential","vcts":["urn:eu.europa.ec.eudi:learning:credential:1"],"docTypes":[]}]}`  
 
-Variable: `VERIFIER_TRUSTSOURCES_0_LOTL_KEYSTORE_PASSWORD`
-Description: If present and non-blank, the password of the Keystore which contains the public key that was used to sign the List of Trusted Lists
+Alternatively, you can use the following environment variables for more fine-grained control:
 
-Variable: `VERIFIER_TRUSTSOURCES_0_KEYSTORE_PATH`
-Description: If present, the URL of the Keystore from which to load the X509 Certificates for this trust source 
-Examples: `classpath:trusted-issuers.jks`, `file:///trusted-issuers.jks`
+Variable: `VERIFIER_ATTESTATIONCLASSIFICATIONS_PID_VCTS`  
+Description: Comma separated list of SD-JWT VC VCTs that corresponds to PIDs.  
+Default value: none
 
-Variable: `VERIFIER_TRUSTSOURCES_0_KEYSTORE_TYPE`
-Description: Type of the Keystore from which to load the X509 Certificates for this trust source
-Examples: `jks`, `pkcs12`
+Variable: `VERIFIER_ATTESTATIONCLASSIFICATIONS_PID_DOCTYPES`  
+Description: Comma separated list of MSO MDoc docTypes that corresponds to PIDs.  
+Default value: none
 
-Variable: `VERIFIER_TRUSTSOURCES_0_KEYSTORE_PASSWORD`
-Description: If present and non-blank, the password of the Keystore from which to load the X509 Certificates for this trust source
+Variable: `VERIFIER_ATTESTATIONCLASSIFICATIONS_QEAA_VCTS`  
+Description: Comma separated list of SD-JWT VC VCTs that corresponds to QEAAs.  
+Default value: none
+
+Variable: `VERIFIER_ATTESTATIONCLASSIFICATIONS_QEAA_DOCTYPES`  
+Description: Comma separated list of MSO MDoc docTypes that corresponds to QEAAs.  
+Default value: none
+
+Variable: `VERIFIER_ATTESTATIONCLASSIFICATIONS_PUBEAA_VCTS`  
+Description: Comma separated list of SD-JWT VC VCTs that corresponds to PubEAAs.  
+Default value: none
+
+Variable: `VERIFIER_ATTESTATIONCLASSIFICATIONS_PUBEAA_DOCTYPES`  
+Description: Comma separated list of MSO MDoc docTypes that corresponds to PubEAAs.  
+Default value: none
+
+Variable: `VERIFIER_ATTESTATIONCLASSIFICATIONS_EAA_XXX_USECASE`  
+Description: EAA use-case.  
+Examples: `mDL`, `learningCredential`, etc...
+
+Variable: `VERIFIER_ATTESTATIONCLASSIFICATIONS_EAA_XXX_VCTS`  
+Description: Comma separated list of SD-JWT VC VCTs that corresponds to EAAs.  
+Default value: none
+
+Variable: `VERIFIER_ATTESTATIONCLASSIFICATIONS_EAA_XXX_DOCTYPES`  
+Description: Comma separated list of MSO MDoc docTypes that corresponds to EAAs.  
+Default value: none
+
+> [!CAUTION]
+> 
+> The environment variable `VERIFIER_ATTESTATIONCLASSIFICATIONS` takes precedence over the fine-grained counterparts. 
 
 ### Proxy configuration  
 

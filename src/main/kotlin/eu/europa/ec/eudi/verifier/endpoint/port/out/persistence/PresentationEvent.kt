@@ -18,11 +18,8 @@ package eu.europa.ec.eudi.verifier.endpoint.port.out.persistence
 import eu.europa.ec.eudi.statium.StatusReference
 import eu.europa.ec.eudi.verifier.endpoint.domain.Jwt
 import eu.europa.ec.eudi.verifier.endpoint.domain.TransactionId
-import eu.europa.ec.eudi.verifier.endpoint.port.input.InitTransactionResponse
-import eu.europa.ec.eudi.verifier.endpoint.port.input.ProfileTO
-import eu.europa.ec.eudi.verifier.endpoint.port.input.WalletResponseAcceptedTO
-import eu.europa.ec.eudi.verifier.endpoint.port.input.WalletResponseTO
-import eu.europa.ec.eudi.verifier.endpoint.port.input.WalletResponseValidationError
+import eu.europa.ec.eudi.verifier.endpoint.port.input.*
+import kotlinx.serialization.json.JsonObject
 import kotlin.time.Instant
 
 sealed interface PresentationEvent {
@@ -48,12 +45,6 @@ sealed interface PresentationEvent {
         val cause: String,
     ) : PresentationEvent
 
-    data class FailedToRetrievePresentationDefinition(
-        override val transactionId: TransactionId,
-        override val timestamp: Instant,
-        val cause: String,
-    ) : PresentationEvent
-
     data class WalletResponsePosted(
         override val transactionId: TransactionId,
         override val timestamp: Instant,
@@ -65,6 +56,7 @@ sealed interface PresentationEvent {
         override val transactionId: TransactionId,
         override val timestamp: Instant,
         val cause: WalletResponseValidationError,
+        val vpToken: JsonObject?,
     ) : PresentationEvent
 
     data class VerifierGotWalletResponse(

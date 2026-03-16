@@ -18,7 +18,6 @@
 package eu.europa.ec.eudi.verifier.endpoint.domain
 
 import arrow.core.Either
-import arrow.core.Ior
 import arrow.core.NonEmptyList
 import arrow.core.nonEmptyListOf
 import arrow.core.serialization.NonEmptyListSerializer
@@ -188,14 +187,14 @@ data class ClientMetaData(
 /**
  * Configuration options for signing.
  */
-data class SigningConfig(
+data class AccessCertificate(
     val key: JWK,
     val algorithm: JWSAlgorithm,
 ) {
     init {
         require(key.isPrivate) { "a private key is required for signing" }
-        require(!key.parsedX509CertChain.isNullOrEmpty()) { "signing key must contain a certificate chain" }
-        require(!certificate.isSelfSigned()) { "signing key must not use a self-signed certificate" }
+        require(!key.parsedX509CertChain.isNullOrEmpty()) { "access certificate must have a non-empty certificate chain" }
+        require(!certificate.isSelfSigned()) { "access certificate must not be self-signed" }
         require(algorithm in JWSAlgorithm.Family.SIGNATURE) { "'${algorithm.name}' is not a valid signature algorithm" }
 
         // Verify a JWSSigner can be instantiated with the provided key/algorithm combo
@@ -221,7 +220,7 @@ typealias ClientId = String
  */
 sealed interface VerifierId {
     val originalClientId: OriginalClientId
-    val jarSigning: SigningConfig
+    val accessCertificate: AccessCertificate
     val clientId: ClientId
 
     /**
@@ -231,7 +230,7 @@ sealed interface VerifierId {
      */
     data class PreRegistered(
         override val originalClientId: String,
-        override val jarSigning: SigningConfig,
+        override val accessCertificate: AccessCertificate,
     ) : VerifierId {
         override val clientId: ClientId = originalClientId
     }
@@ -243,11 +242,11 @@ sealed interface VerifierId {
      */
     data class X509SanDns(
         override val originalClientId: String,
-        override val jarSigning: SigningConfig,
+        override val accessCertificate: AccessCertificate,
     ) : VerifierId {
         init {
-            require(jarSigning.certificate.containsSanDns(originalClientId)) {
-                "Original Client Id '$originalClientId' not contained in 'DNS' Subject Alternative Names of JAR Signing Certificate."
+            require(accessCertificate.certificate.containsSanDns(originalClientId)) {
+                "Original Client Id '$originalClientId' not contained in 'DNS' Subject Alternative Names of Access Certificate."
             }
         }
 
@@ -261,10 +260,10 @@ sealed interface VerifierId {
      */
     data class X509Hash(
         override val originalClientId: String,
-        override val jarSigning: SigningConfig,
+        override val accessCertificate: AccessCertificate,
     ) : VerifierId {
         init {
-            require(jarSigning.certificate.encodedHashMatches(originalClientId)) {
+            require(accessCertificate.certificate.encodedHashMatches(originalClientId)) {
                 "Original Client Id '$originalClientId' doesn't match the expected value"
             }
         }
@@ -299,7 +298,6 @@ data class VerifierConfig(
     val clientMetaData: ClientMetaData,
     val transactionDataHashAlgorithm: HashAlgorithm,
     val authorizationRequestUri: UnresolvedAuthorizationRequestUri,
-    val trustSourcesConfig: Map<Regex, TrustSourceConfig>?,
 )
 
 /**
@@ -359,21 +357,6 @@ private fun SanType.asInt() =
         SanType.DNS -> 2
     }
 
-typealias TrustSourceConfig = Ior<TrustedListConfig, KeyStoreConfig>
-
-enum class ProviderKind(val value: String) {
-    PIDProvider("http://uri.etsi.org/Svc/Svctype/Provider/PID"),
-    QEEAProvider("http://uri.etsi.org/TrstSvc/Svctype/EAA/Q"),
-    PubEAAProvider("http://uri.etsi.org/TrstSvc/Svctype/EAA/Pub-EAA"),
-}
-
-data class TrustedListConfig(
-    val location: URL,
-    val serviceTypeFilter: ProviderKind?,
-    val refreshInterval: String = "0 0 * * * *",
-    val keystoreConfig: KeyStoreConfig?,
-)
-
 data class KeyStoreConfig(
     val keystorePath: String,
     val keystoreType: String? = "JKS",
@@ -387,6 +370,3 @@ internal fun VpFormatsSupported.supports(format: Format): Boolean =
         Format.MsoMdoc -> null != msoMdoc
         else -> false
     }
-
-fun TrustSourcesConfig(trustedList: TrustedListConfig?, keystore: KeyStoreConfig?): Ior<TrustedListConfig, KeyStoreConfig> =
-    Ior.fromNullables(trustedList, keystore) ?: error("Either trustedList or keystore must be provided")
