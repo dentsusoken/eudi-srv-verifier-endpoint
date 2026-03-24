@@ -473,6 +473,8 @@ private fun SupplierContextDsl<*>.sdJwtVcValidator(
         audience = bean<VerifierConfig>().verifierId,
         statusListTokenValidator = beanProvider<StatusListTokenValidator>().ifAvailable,
         typeMetadataPolicy = bean<TypeMetadataPolicy>(),
+        clock = bean(),
+        skew = env.clockSkew(),
     )
 }
 
@@ -737,10 +739,17 @@ private fun AttestationIdentifierPredicate.Companion.of(
     vcts: List<String>,
     docTypes: List<String>,
 ): AttestationIdentifierPredicate {
-    val vctsPredicate = AttestationIdentifierPredicate.any(vcts.map { SDJwtVc(it) }.toSet())
-    val docTypesPredicate = AttestationIdentifierPredicate.any(docTypes.map { MDoc(it) }.toSet())
+    val vctsPredicate = AttestationIdentifierPredicate.any(vcts.map { AttestationIdentifier.SDJwtVc(it) }.toSet())
+    val docTypesPredicate = AttestationIdentifierPredicate.any(docTypes.map { AttestationIdentifier.MDoc(it) }.toSet())
     return vctsPredicate or docTypesPredicate
 }
 
 private val EAAAttestationClassification.attestationIdentifierPredicate: AttestationIdentifierPredicate
     get() = AttestationIdentifierPredicate.of(vcts = vcts, docTypes = docTypes)
+
+private fun Environment.clockSkew(): Duration =
+    Duration.parse(getProperty("verifier.validation.sdJwtVc.kbJwt.clock.skew", "PT5S")).also {
+        require(!it.isNegative()) {
+            "Skew must be a positive duration"
+        }
+    }
