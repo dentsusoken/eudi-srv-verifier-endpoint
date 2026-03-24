@@ -2,6 +2,7 @@ version: '3.3'
 
 services:
   verifier:
+    profiles: ["base"]
     image: ghcr.io/eu-digital-identity-wallet/eudi-srv-verifier-endpoint:latest
     container_name: verifier-backend
     ports:
@@ -19,6 +20,7 @@ services:
       - ./keystore.jks:/certs/keystore.jks
 
   verifier-ui:
+    profiles: ["base"]
     image: ghcr.io/eu-digital-identity-wallet/eudi-web-verifier:latest
     container_name: verifier-ui
     ports:
@@ -28,6 +30,7 @@ services:
       - HOST_API="https://10.240.174.10"
 
   haproxy:
+    profiles: ["base"]
     image: haproxy:2.7.2
     container_name: haproxy
     ports:
@@ -35,3 +38,37 @@ services:
     volumes:
       - ./haproxy.conf:/usr/local/etc/haproxy/haproxy.cfg
       - ./haproxy.pem:/etc/ssl/certs/mysite.pem
+
+  # --- local profile services ---
+  # Usage: docker compose --profile local up --build
+  # Prerequisite: bash ../../eudi-srv-verifier-endpoint/scripts/setup-verifier-certs.sh
+  #               bash ../../eudi-web-verifier/scripts/patch_nii_demo.sh
+
+  verifier-backend-local:
+    profiles: ["local"]
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile_local
+    container_name: verifier-backend-local
+    ports:
+      - "8080:8080"
+    environment:
+      SPRING_CONFIG_ADDITIONAL_LOCATION: "file:/config/"
+      VERIFIER_ACCESS_CERTIFICATE_KEYSTORE: "file:///certs/keystore.jks"
+      VERIFIER_PUBLICURL: "http://localhost:8080"
+    volumes:
+      - ../src/main/resources/application-local.properties:/config/application-local.properties:ro
+      - ../src/main/resources/keystore.jks:/certs/keystore.jks:ro
+
+  verifier-ui-local:
+    profiles: ["local"]
+    build:
+      context: ../../eudi-web-verifier
+      dockerfile: Dockerfile_local
+    container_name: verifier-ui-local
+    ports:
+      - "4200:4300"
+    environment:
+      BACKEND_URL: "http://verifier-backend-local:8080"
+    depends_on:
+      - verifier-backend-local
