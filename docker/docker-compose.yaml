@@ -55,7 +55,7 @@ services:
     environment:
       SPRING_CONFIG_ADDITIONAL_LOCATION: "file:/config/"
       VERIFIER_ACCESS_CERTIFICATE_KEYSTORE: "file:///certs/keystore.jks"
-      VERIFIER_PUBLICURL: "http://localhost:8080"
+      VERIFIER_PUBLICURL: "https://localhost"
     volumes:
       - ../src/main/resources/application-local.properties:/config/application-local.properties:ro
       - ../src/main/resources/keystore.jks:/certs/keystore.jks:ro
@@ -72,3 +72,16 @@ services:
       BACKEND_URL: "http://verifier-backend-local:8080"
     depends_on:
       - verifier-backend-local
+
+  haproxy-local:
+    profiles: ["local"]
+    image: haproxy:2.7.2
+    container_name: haproxy-local
+    ports:
+      - "443:443"
+    volumes:
+      - ./haproxy-local.conf:/usr/local/etc/haproxy/haproxy.cfg
+      - ./haproxy.pem:/etc/ssl/certs/mysite.pem
+    depends_on:
+      - verifier-backend-local
+      - verifier-ui-local
