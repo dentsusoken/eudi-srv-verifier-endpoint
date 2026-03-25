@@ -38,3 +38,6 @@ out/
 
 ### Kotlin ###
 .kotlin
+
+### Generated files ###
+docker/haproxy-local.conf
