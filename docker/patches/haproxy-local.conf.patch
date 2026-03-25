@@ -1,0 +1,14 @@
+--- haproxy.conf
++++ haproxy-local.conf
+@@ -29,9 +29,9 @@
+ backend verifier-backend
+     balance roundrobin
+     cookie SERVERUSED insert indirect nocache
+-    server server1 verifier-backend:8080 cookie server1
++    server server1 verifier-backend-local:8080 cookie server1
+
+ backend verifier-ui
+     balance roundrobin
+     cookie SERVERUSED insert indirect nocache
+-    server server1 verifier-ui:4300 cookie server1
++    server server1 verifier-ui-local:4300 cookie server1
