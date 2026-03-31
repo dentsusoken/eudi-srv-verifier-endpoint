@@ -11,6 +11,14 @@ IACA_KEY="$ROOT/eudi-srv-issuer-oidc-py/script/certs/privKey/IACA_UT_key.pem"
 WALLET_CERT_DIR="${WALLET_DIR:-$HOME/work/eudi-app-ios-wallet-ui}/Wallet/Certificate"
 VERIFIER_RESOURCES="$SCRIPT_DIR/../src/main/resources"
 
+# --cloud フラグの解析
+CLOUD=false
+for arg in "$@"; do
+  if [ "$arg" = "--cloud" ]; then
+    CLOUD=true
+  fi
+done
+
 # 前提ファイルの確認
 for f in "$IACA_CERT" "$IACA_KEY"; do
   if [ ! -f "$f" ]; then
@@ -25,12 +33,14 @@ trap 'rm -rf "$VTMP"' EXIT
 # ----------------------------------------------------------------
 # 1. IACA_UT.pem → DER 変換して pidissuerca02_ut.der を差し替え
 # ----------------------------------------------------------------
-echo "=== Replacing pidissuerca02_ut.der with IACA_UT ==="
-openssl x509 \
-  -in "$IACA_CERT" \
-  -outform DER \
-  -out "$WALLET_CERT_DIR/pidissuerca02_ut.der"
-echo "  -> $WALLET_CERT_DIR/pidissuerca02_ut.der"
+if [ "$CLOUD" = false ]; then
+  echo "=== Replacing pidissuerca02_ut.der with IACA_UT ==="
+  openssl x509 \
+    -in "$IACA_CERT" \
+    -outform DER \
+    -out "$WALLET_CERT_DIR/pidissuerca02_ut.der"
+  echo "  -> $WALLET_CERT_DIR/pidissuerca02_ut.der"
+fi
 
 # ----------------------------------------------------------------
 # 2. Verifier JAR 署名証明書チェーン生成 (IACA_UT → intermediate → verifier)
