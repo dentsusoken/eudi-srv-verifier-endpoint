@@ -1,0 +1,33 @@
+version: '3.3'
+
+services:
+  # Usage: docker compose -f docker-compose_dev.yaml --profile local up --build
+  # Prerequisite: bash ../../eudi-srv-verifier-endpoint/scripts/setup-verifier-certs.sh
+
+  verifier-backend-local:
+    profiles: ["local"]
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile_local
+    container_name: verifier-backend-local
+    ports:
+      - "8080:8080"
+    environment:
+      SPRING_CONFIG_ADDITIONAL_LOCATION: "file:/config/"
+      VERIFIER_ACCESS_CERTIFICATE_KEYSTORE: "file:///certs/keystore.jks"
+      VERIFIER_PUBLICURL: "https://localhost"
+    volumes:
+      - ../src/main/resources/application-local.properties:/config/application-local.properties:ro
+      - ../src/main/resources/keystore.jks:/certs/keystore.jks:ro
+
+  haproxy-local:
+    profiles: ["local"]
+    image: haproxy:2.7.2
+    container_name: haproxy-local
+    ports:
+      - "443:443"
+    volumes:
+      - ./haproxy-local.conf:/usr/local/etc/haproxy/haproxy.cfg
+      - ./haproxy.pem:/etc/ssl/certs/mysite.pem
+    depends_on:
+      - verifier-backend-local
