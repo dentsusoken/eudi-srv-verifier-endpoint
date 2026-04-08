@@ -53,7 +53,9 @@ bash eudi-web-verifier/scripts/patch_nii_demo.sh
 ```
 
 ### Start containers
+There are **two ways** to start the environment, depending on your use case.
 
+#### 1: Start all components as Docker containers
 ```bash
 cd eudi-srv-verifier-endpoint/docker
 docker compose --profile local up --build
@@ -62,6 +64,25 @@ docker compose --profile local up --build
 > **Note:** `--build` is required on first run. Subsequent runs can omit it unless source code has changed.
 
 Open `https://localhost` in a browser.
+
+#### 2: Start everything except the Verifier frontend as Docker containers 
+Start the Verifier backend and its dependent services as Docker containers,
+and run the Verifier frontend (eudi-web-verifier) locally outside of Docker.
+
+
+Start containers except the Verifier frontend
+```bash
+cd eudi-srv-verifier-endpoint/docker
+docker compose -f docker-compose_dev.yaml --profile local up --build
+```
+
+Start the Verifier frontend locally
+```bash
+cd eudi-web-verifier 
+npm run config && npx ng serve --configuration local
+```
+
+Open `http://localhost:4200` in a browser.
 
 ### Accessing from another machine
 
