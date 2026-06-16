@@ -15,16 +15,25 @@
  */
 package eu.europa.ec.eudi.verifier.endpoint.adapter.input.web
 
+import arrow.core.raise.catch
+import arrow.core.raise.effect
+import arrow.core.raise.fold
 import eu.europa.ec.eudi.sdjwt.NimbusSdJwtOps
 import eu.europa.ec.eudi.verifier.endpoint.domain.AttestationClassifications
 import eu.europa.ec.eudi.verifier.endpoint.domain.Nonce
-import eu.europa.ec.eudi.verifier.endpoint.port.input.*
+import eu.europa.ec.eudi.verifier.endpoint.port.input.ProcessSdJwtVc
+import eu.europa.ec.eudi.verifier.endpoint.port.input.ValidateMsoMdocDeviceResponse
+import eu.europa.ec.eudi.verifier.endpoint.port.input.ValidateSdJwtVc
+import eu.europa.ec.eudi.verifier.endpoint.port.input.toJson
 import org.slf4j.LoggerFactory
 import org.springframework.http.MediaType.APPLICATION_FORM_URLENCODED
 import org.springframework.http.MediaType.APPLICATION_JSON
+import org.springframework.util.MultiValueMap
 import org.springframework.web.reactive.function.server.*
 import org.springframework.web.reactive.function.server.ServerResponse.badRequest
 import org.springframework.web.reactive.function.server.ServerResponse.ok
+import kotlin.collections.filterNot
+import kotlin.collections.firstOrNull
 
 private val log = LoggerFactory.getLogger(UtilityApi::class.java)
 
@@ -61,83 +70,53 @@ internal class UtilityApi(
             )
         }
 
-    private suspend fun handleValidateMsoMdocDeviceResponse(request: ServerRequest): ServerResponse {
-        val form = request.awaitFormData()
-        val deviceResponse =
-            form["device_response"]
-                ?.firstOrNull { it.isNotBlank() }
-                .let {
-                    requireNotNull(it) { "device_response must be provided" }
-                }
-        val issuerChain = form["issuer_chain"]?.filterNot { it.isNullOrBlank() }?.firstOrNull()
+    private suspend fun handleValidateMsoMdocDeviceResponse(request: ServerRequest): ServerResponse =
+        effect {
+            val form = request.awaitFormData()
+            val deviceResponse =
+                form["device_response"]
+                    ?.firstOrNull { it.isNotBlank() }
+                    .let {
+                        requireNotNull(it) { "device_response must be provided" }
+                    }
+            val issuerChain = form.issuerChain()
+            validateMsoMdocDeviceResponse(deviceResponse = deviceResponse, issuerChain = issuerChain)
+        }.fold(
+            transform = { documents -> ok().json().bodyValueAndAwait(documents) },
+            recover = { error -> badRequest().json().bodyValueAndAwait(error) },
+        )
 
-        return when (val result = validateMsoMdocDeviceResponse(deviceResponse = deviceResponse, issuerChain = issuerChain)) {
-            is DeviceResponseValidationResult.Valid -> {
-                ok()
-                    .json()
-                    .bodyValueAndAwait(result.documents)
-            }
-
-            is DeviceResponseValidationResult.Invalid -> {
-                badRequest()
-                    .json()
-                    .bodyValueAndAwait(result.error)
-            }
-        }
-    }
-
-    private suspend fun handleValidateSdJwtVc(request: ServerRequest): ServerResponse {
-        val form = request.awaitFormData()
-        val unverifiedSdJwtVc =
-            form["sd_jwt_vc"]
-                ?.firstOrNull { it.isNotBlank() }
-                .let {
-                    requireNotNull(it) { "sd_jwt_vc must be provided" }
-                }
-        val nonce =
-            form["nonce"]
-                ?.firstOrNull { it.isNotBlank() }
-                .let {
-                    requireNotNull(it) { "nonce must be provided" }
-                    Nonce(it)
-                }
-        val issuerChain = form["issuer_chain"]?.filterNot { it.isNullOrBlank() }?.firstOrNull()
-
-        return when (val result = validateSdJwtVc(unverifiedSdJwtVc, nonce, issuerChain)) {
-            is SdJwtVcValidationResult.Valid -> {
-                val reCreated =
+    private suspend fun handleValidateSdJwtVc(request: ServerRequest): ServerResponse =
+        effect {
+            val form = request.awaitFormData()
+            val unverifiedSdJwtVc = form.unprocessedSdJwtVc()
+            val nonce = form.nonce()
+            val issuerChain = form.issuerChain()
+            validateSdJwtVc(unverifiedSdJwtVc, nonce, issuerChain)
+        }.fold(
+            transform = { result ->
+                val (reCreated, _) =
                     with(NimbusSdJwtOps) {
-                        result.payload.sdJwt
-                            .recreateClaimsAndDisclosuresPerClaim()
-                            .first
+                        result.sdJwt.recreateClaimsAndDisclosuresPerClaim()
                     }
                 ok().json().bodyValueAndAwait(reCreated)
-            }
+            },
+            recover = { error -> badRequest().json().bodyValueAndAwait(error.toJson()) },
+        )
 
-            is SdJwtVcValidationResult.Invalid -> {
-                badRequest().json().bodyValueAndAwait(result.toJson())
-            }
-        }
-    }
-
-    private suspend fun handleProcessSdJwtVc(request: ServerRequest): ServerResponse {
-        val form = request.awaitFormData()
-        val unprocessedSdJwtVc =
-            form["sd_jwt_vc"]
-                ?.firstOrNull { it.isNotBlank() }
-                .let {
-                    requireNotNull(it) { "sd_jwt_vc must be provided" }
-                }
-
-        return processSdJwtVc(unprocessedSdJwtVc)
-            .fold(
-                ifLeft = { error ->
-                    log.warn("Could not process SD-JWT VC payload.", error)
-                    badRequest().buildAndAwait()
-                },
-                ifRight = { ok().json().bodyValueAndAwait(it) },
-            )
-    }
+    private suspend fun handleProcessSdJwtVc(request: ServerRequest): ServerResponse =
+        catch(
+            block = {
+                val form = request.awaitFormData()
+                val unprocessedSdJwtVc = form.unprocessedSdJwtVc()
+                processSdJwtVc(unprocessedSdJwtVc)
+            },
+            transform = { ok().json().bodyValueAndAwait(it) },
+            catch = { error ->
+                log.warn("Could not process SD-JWT VC payload.", error)
+                badRequest().buildAndAwait()
+            },
+        )
 
     private suspend fun handleAttestationClassifications(request: ServerRequest): ServerResponse =
         ok().json().bodyValueAndAwait(attestationClassifications)
@@ -149,3 +128,20 @@ internal class UtilityApi(
         const val ATTESTATION_CLASSIFICATIONS_PATH = "/utilities/attestationClassifications"
     }
 }
+
+private fun MultiValueMap<String, String>.unprocessedSdJwtVc(): String {
+    val unprocessedSdJwtVc = this["sd_jwt_vc"]?.firstOrNull { it.isNotBlank() }
+    return requireNotNull(unprocessedSdJwtVc) { "sd_jwt_vc must be provided" }
+}
+
+private fun MultiValueMap<String, String>.nonce(): Nonce {
+    val nonce = this["nonce"]?.firstOrNull { it.isNotBlank() }?.let(::Nonce)
+    return requireNotNull(nonce) { "nonce must be provided" }
+}
+
+private fun MultiValueMap<String, String>.deviceResponse(): String {
+    val deviceResponse = this["device_response"]?.firstOrNull { it.isNotBlank() }
+    return requireNotNull(deviceResponse) { "device_response must be provided" }
+}
+
+private fun MultiValueMap<String, String>.issuerChain(): String? = this["issuer_chain"]?.filterNot { it.isBlank() }?.firstOrNull()

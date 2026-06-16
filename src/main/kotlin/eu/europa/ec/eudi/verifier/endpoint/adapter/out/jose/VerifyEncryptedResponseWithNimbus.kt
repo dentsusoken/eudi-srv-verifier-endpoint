@@ -15,7 +15,9 @@
  */
 package eu.europa.ec.eudi.verifier.endpoint.adapter.out.jose
 
-import arrow.core.Either
+import arrow.core.raise.Raise
+import arrow.core.raise.catch
+import arrow.core.raise.context.raise
 import com.nimbusds.jose.EncryptionMethod
 import com.nimbusds.jose.JWEAlgorithm
 import com.nimbusds.jose.jwk.JWK
@@ -30,11 +32,12 @@ import com.nimbusds.jwt.proc.DefaultJWTProcessor
 import com.nimbusds.jwt.proc.JWTProcessor
 import eu.europa.ec.eudi.verifier.endpoint.domain.*
 import eu.europa.ec.eudi.verifier.endpoint.port.input.AuthorisationResponseTO
+import eu.europa.ec.eudi.verifier.endpoint.port.input.WalletResponseValidationError
 import eu.europa.ec.eudi.verifier.endpoint.port.out.jose.VerifyEncryptedResponse
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
-import org.slf4j.Logger
-import org.slf4j.LoggerFactory
 
 /**
  * Decrypts an encrypted JWT and maps the JWT claimSet to an AuthorisationResponseTO
@@ -42,31 +45,47 @@ import org.slf4j.LoggerFactory
 class VerifyEncryptedResponseWithNimbus(
     private val responseEncryptionOption: ResponseEncryptionOption,
 ) : VerifyEncryptedResponse {
-    private val logger: Logger = LoggerFactory.getLogger(VerifyEncryptedResponseWithNimbus::class.java)
-
-    override fun invoke(
+    context(_: Raise<WalletResponseValidationError.InvalidEncryptedResponse>)
+    override suspend fun invoke(
         ephemeralResponseEncryptionKey: JWK,
         encryptedResponse: Jwt,
         apv: Nonce,
-    ): Either<Throwable, AuthorisationResponseTO> =
-        Either.catch {
-            val encryptedJwt = EncryptedJWT.parse(encryptedResponse)
-            val processor =
-                with(encryptedJwt.header) {
-                    require(algorithm == responseEncryptionOption.algorithm) {
-                        "Encrypted response uses an unsupported JWE Algorithm: ${algorithm.name}, " +
-                            "expected: ${responseEncryptionOption.algorithm.name}"
+    ): AuthorisationResponseTO =
+        withContext(Dispatchers.Default) {
+            catch(
+                block = {
+                    val encryptedJwt = EncryptedJWT.parse(encryptedResponse)
+                    val processor = encryptedProcessor(ephemeralResponseEncryptionKey, encryptedJwt)
+                    val claimSet = processor.process(encryptedJwt, null)
+                    claimSet.mapToDomain()
+                },
+                catch = { throwable ->
+                    if (throwable is Exception) {
+                        raise(WalletResponseValidationError.InvalidEncryptedResponse(throwable))
+                    } else {
+                        throw throwable
                     }
-                    require(encryptionMethod in responseEncryptionOption.encryptionMethods) {
-                        "Encrypted response uses an unsupported JWE Encryption Method: ${encryptionMethod.name}, " +
-                            "expected one of: ${responseEncryptionOption.encryptionMethods.joinToString { it.name }}"
-                    }
-
-                    encryptedProcessor(algorithm, encryptionMethod, ephemeralResponseEncryptionKey)
-                }
-            val claimSet = processor.process(encryptedJwt, null)
-            claimSet.mapToDomain()
+                },
+            )
         }
+
+    private fun encryptedProcessor(
+        ephemeralResponseEncryptionKey: JWK,
+        encryptedJwt: EncryptedJWT,
+    ): JWTProcessor<SecurityContext> {
+        with(encryptedJwt.header) {
+            require(algorithm == responseEncryptionOption.algorithm) {
+                "Encrypted response uses an unsupported JWE Algorithm: ${algorithm.name}, " +
+                    "expected: ${responseEncryptionOption.algorithm.name}"
+            }
+            require(encryptionMethod in responseEncryptionOption.encryptionMethods) {
+                "Encrypted response uses an unsupported JWE Encryption Method: ${encryptionMethod.name}, " +
+                    "expected one of: ${responseEncryptionOption.encryptionMethods.joinToString { it.name }}"
+            }
+
+            return encryptedProcessor(algorithm, encryptionMethod, ephemeralResponseEncryptionKey)
+        }
+    }
 
     private fun encryptedProcessor(
         algorithm: JWEAlgorithm,

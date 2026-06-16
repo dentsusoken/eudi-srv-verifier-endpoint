@@ -22,11 +22,9 @@ import eu.europa.ec.eudi.verifier.endpoint.domain.*
  * An out port that signs and encrypts a [Presentation.Requested]
  */
 fun interface CreateJar {
-    operator fun invoke(
-        verifierConfig: VerifierConfig,
-        clock: Clock,
+    suspend operator fun invoke(
         presentation: Presentation.Requested,
         walletNonce: String?,
         walletJarEncryptionRequirement: EncryptionRequirement,
-    ): Either<Throwable, Jwt>
+    ): Jwt
 }
