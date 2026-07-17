@@ -17,7 +17,9 @@ package eu.europa.ec.eudi.verifier.endpoint.adapter.out.persistence
 
 import arrow.core.NonEmptyList
 import arrow.core.nonEmptyListOf
+import eu.europa.ec.eudi.verifier.endpoint.domain.Channel
 import eu.europa.ec.eudi.verifier.endpoint.domain.Presentation
+import eu.europa.ec.eudi.verifier.endpoint.domain.RequestId
 import eu.europa.ec.eudi.verifier.endpoint.domain.TransactionId
 import eu.europa.ec.eudi.verifier.endpoint.domain.isExpired
 import eu.europa.ec.eudi.verifier.endpoint.port.out.persistence.*
@@ -35,18 +37,17 @@ data class PresentationStoredEntry(
 class PresentationInMemoryRepo(
     private val presentations: ConcurrentHashMap<TransactionId, PresentationStoredEntry> = ConcurrentHashMap(),
 ) {
-
     val loadPresentationById: LoadPresentationById by lazy {
         LoadPresentationById { presentationId -> presentations[presentationId]?.presentation }
     }
 
     val loadPresentationByRequestId: LoadPresentationByRequestId by lazy {
-        fun requestId(p: Presentation) = when (p) {
-            is Presentation.Requested -> p.requestId
-            is Presentation.RequestObjectRetrieved -> p.requestId
-            is Presentation.Submitted -> p.requestId
-            is Presentation.TimedOut -> null
+        fun requestId(p: Presentation): RequestId? {
+            val channel = p.channel
+            if (p is Presentation.TimedOut || channel !is Channel.OverHttp) return null
+            return channel.requestId
         }
+
         LoadPresentationByRequestId { requestId ->
             presentations.values.map { it.presentation }.firstOrNull {
                 requestId(it) == requestId
@@ -56,7 +57,11 @@ class PresentationInMemoryRepo(
 
     val loadIncompletePresentationsOlderThan: LoadIncompletePresentationsOlderThan by lazy {
         LoadIncompletePresentationsOlderThan { at ->
-            presentations.values.map { it.presentation }.toList().filter { it.isExpired(at) }
+            presentations.values
+                .map { it.presentation }
+                .filter { it !is Presentation.Submitted && it !is Presentation.TimedOut }
+                .toList()
+                .filter { it.isExpired(at) }
         }
     }
 
@@ -71,8 +76,9 @@ class PresentationInMemoryRepo(
     val loadPresentationEvents: LoadPresentationEvents by lazy {
         LoadPresentationEvents { transactionId ->
             val p = presentations[transactionId]
-            if (p == null) null
-            else {
+            if (p == null) {
+                null
+            } else {
                 checkNotNull(p.events)
             }
         }
@@ -82,20 +88,23 @@ class PresentationInMemoryRepo(
         PublishPresentationEvent { event ->
             log(event)
             val transactionId = event.transactionId
-            val presentationAndEvent = checkNotNull(presentations[transactionId]) {
-                "Cannot publish event without a presentation"
-            }
-            val presentationEvents = when (val existingEvents = presentationAndEvent.events) {
-                null -> nonEmptyListOf(event)
-                else -> existingEvents + event
-            }
+            val presentationAndEvent =
+                checkNotNull(presentations[transactionId]) {
+                    "Cannot publish event without a presentation"
+                }
+            val presentationEvents =
+                when (val existingEvents = presentationAndEvent.events) {
+                    null -> nonEmptyListOf(event)
+                    else -> existingEvents + event
+                }
             presentations[transactionId] = presentationAndEvent.copy(events = presentationEvents)
         }
     }
 
     val deletePresentationsInitiatedBefore: DeletePresentationsInitiatedBefore by lazy {
         DeletePresentationsInitiatedBefore { at ->
-            presentations.filter { (_, presentationAndEvents) -> presentationAndEvents.presentation.initiatedAt < at }
+            presentations
+                .filter { (_, presentationAndEvents) -> presentationAndEvents.presentation.initiatedAt < at }
                 .keys
                 .onEach { presentations.remove(it) }
                 .toList()
@@ -104,9 +113,12 @@ class PresentationInMemoryRepo(
 }
 
 private val logger = LoggerFactory.getLogger("EVENTS")
+
 private fun log(e: PresentationEvent) {
     fun txt(s: String) = "$s - tx: ${e.transactionId.value}"
+
     fun warn(s: String) = logger.warn(txt(s))
+
     fun info(s: String) = logger.info(txt(s))
     when (e) {
         is PresentationEvent.VerifierFailedToGetWalletResponse -> warn("Verifier failed to retrieve wallet response. Cause ${e.cause}")
@@ -119,5 +131,6 @@ private fun log(e: PresentationEvent) {
         is PresentationEvent.WalletResponsePosted -> info("Wallet posted response")
         is PresentationEvent.AttestationStatusCheckSuccessful -> info("Attestation status check successful")
         is PresentationEvent.AttestationStatusCheckFailed -> warn("Attestation status check failed")
+        is PresentationEvent.DcApiTransactionInitialized -> info("DC API transaction initialized")
     }
 }

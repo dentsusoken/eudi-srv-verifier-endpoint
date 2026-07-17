@@ -21,7 +21,7 @@ import arrow.core.NonEmptyList
 import arrow.core.serialization.NonEmptyListSerializer
 import eu.europa.ec.eudi.etsi1196x2.consultation.CertificationChainValidation
 import eu.europa.ec.eudi.etsi1196x2.consultation.IsChainTrustedForContextF
-import eu.europa.ec.eudi.etsi1196x2.consultation.ValidateCertificateChainJvm
+import eu.europa.ec.eudi.etsi1196x2.consultation.ValidateCertificateChainUsingPKIXJvm
 import eu.europa.ec.eudi.etsi1196x2.consultation.VerificationContext
 import io.ktor.client.*
 import io.ktor.client.call.*
@@ -50,28 +50,31 @@ fun IsChainTrustedForContextF.Companion.usingTrustValidatorService(
     service: Url,
 ): IsChainTrustedForContextF<NonEmptyList<X509Certificate>, VerificationContext, TrustAnchor> =
     IsChainTrustedForContextF { chain, context ->
-        val response = httpClient.post {
-            expectSuccess = true
+        val response =
+            httpClient
+                .post {
+                    expectSuccess = true
 
-            url(service)
-            contentType(ContentType.Application.Json)
-            setBody(TrustQueryTO(chain, VerificationContextTO.from(context), context.useCaseOrNull))
+                    url(service)
+                    contentType(ContentType.Application.Json)
+                    setBody(TrustQueryTO(chain, VerificationContextTO.from(context), context.useCaseOrNull))
 
-            accept(ContentType.Application.Json)
-        }.body<TrustResponseTO>()
+                    accept(ContentType.Application.Json)
+                }.body<TrustResponseTO>()
 
         val trustAnchor = response.trustAnchor?.let { TrustAnchor(it, null) }
-        if (response.trusted) CertificationChainValidation.Trusted(
-            checkNotNull(trustAnchor) { "trustAnchor cannot be null when chain is trusted" },
-        )
-        else CertificationChainValidation.NotTrusted(IllegalArgumentException("chain is not trusted "))
+        if (response.trusted)
+            CertificationChainValidation.Trusted(
+                checkNotNull(trustAnchor) { "trustAnchor cannot be null when chain is trusted" },
+            )
+        else
+            CertificationChainValidation.NotTrusted(IllegalArgumentException("chain is not trusted "))
     }
 
 @Serializable
 private enum class VerificationContextTO {
-    WalletInstanceAttestation,
-    WalletUnitAttestation,
-    WalletUnitAttestationStatus,
+    WalletProviderAttestation,
+    WalletOrKeyStorageStatus,
     PID,
     PIDStatus,
     QEAA,
@@ -82,15 +85,15 @@ private enum class VerificationContextTO {
     EAAStatus,
     WalletRelyingPartyAccessCertificate,
     WalletRelyingPartyRegistrationCertificate,
+    WalletRelyingPartyRegistrationCertificateStatus,
     Custom,
     ;
 
     companion object {
         fun from(context: VerificationContext): VerificationContextTO =
             when (context) {
-                VerificationContext.WalletInstanceAttestation -> WalletInstanceAttestation
-                VerificationContext.WalletUnitAttestation -> WalletUnitAttestation
-                VerificationContext.WalletUnitAttestationStatus -> WalletUnitAttestationStatus
+                VerificationContext.WalletProviderAttestation -> WalletProviderAttestation
+                VerificationContext.WalletOrKeyStorageStatus -> WalletOrKeyStorageStatus
                 VerificationContext.PID -> PID
                 VerificationContext.PIDStatus -> PIDStatus
                 VerificationContext.QEAA -> QEAA
@@ -102,6 +105,7 @@ private enum class VerificationContextTO {
                 is VerificationContext.Custom -> Custom
                 VerificationContext.WalletRelyingPartyAccessCertificate -> WalletRelyingPartyAccessCertificate
                 VerificationContext.WalletRelyingPartyRegistrationCertificate -> WalletRelyingPartyRegistrationCertificate
+                VerificationContext.WalletRelyingPartyRegistrationCertificateStatus -> WalletRelyingPartyRegistrationCertificateStatus
             }
     }
 }
@@ -109,12 +113,16 @@ private enum class VerificationContextTO {
 private object X509CertificateBase64Serializer : KSerializer<X509Certificate> {
     private val base64 = Base64.withPadding(Base64.PaddingOption.ABSENT_OPTIONAL)
 
-    override val descriptor: SerialDescriptor = PrimitiveSerialDescriptor(
-        "eu.europa.ec.eudi.verifier.endpoint.adapter.out.consultation.X509CertificateBase64Serializer",
-        PrimitiveKind.STRING,
-    )
+    override val descriptor: SerialDescriptor =
+        PrimitiveSerialDescriptor(
+            "eu.europa.ec.eudi.verifier.endpoint.adapter.out.consultation.X509CertificateBase64Serializer",
+            PrimitiveKind.STRING,
+        )
 
-    override fun serialize(encoder: Encoder, value: X509Certificate) {
+    override fun serialize(
+        encoder: Encoder,
+        value: X509Certificate,
+    ) {
         val der = value.encoded
         encoder.encodeString(base64.encode(der))
     }
@@ -157,24 +165,26 @@ private data class TrustResponseTO(
 }
 
 private val VerificationContext.useCaseOrNull: String?
-    get() = when (this) {
-        is VerificationContext.EAA -> useCase
-        is VerificationContext.EAAStatus -> useCase
-        is VerificationContext.Custom -> useCase
-        else -> null
-    }
+    get() =
+        when (this) {
+            is VerificationContext.EAA -> useCase
+            is VerificationContext.EAAStatus -> useCase
+            is VerificationContext.Custom -> useCase
+            else -> null
+        }
 
 val IsChainTrustedForContextF.Companion.Ignored: IsChainTrustedForContextF<NonEmptyList<X509Certificate>, VerificationContext, TrustAnchor>
-    get() = IsChainTrustedForContextF { chain, _ ->
-        CertificationChainValidation.Trusted(TrustAnchor(chain.last(), null))
-    }
+    get() =
+        IsChainTrustedForContextF { chain, _ ->
+            CertificationChainValidation.Trusted(TrustAnchor(chain.last(), null))
+        }
 
 fun IsChainTrustedForContextF.Companion.usingTrustAnchors(
     trustAnchors: NonEmptyList<X509Certificate>,
     customization: PKIXParameters.() -> Unit = { isRevocationEnabled = false },
 ): IsChainTrustedForContextF<NonEmptyList<X509Certificate>, VerificationContext, TrustAnchor> =
     IsChainTrustedForContextF { chain, _ ->
-        ValidateCertificateChainJvm(customization = customization)
+        ValidateCertificateChainUsingPKIXJvm(customization = customization)
             .invoke(
                 chain = chain,
                 trustAnchors = ConsultationNonEmptyList(trustAnchors.map { TrustAnchor(it, null) }),

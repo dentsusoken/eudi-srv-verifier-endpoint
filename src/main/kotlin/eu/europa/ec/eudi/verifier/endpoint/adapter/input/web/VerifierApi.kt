@@ -15,16 +15,23 @@
  */
 package eu.europa.ec.eudi.verifier.endpoint.adapter.input.web
 
+import arrow.core.raise.effect
+import arrow.core.raise.fold
+import eu.europa.ec.eudi.verifier.endpoint.adapter.input.web.WalletApi.Companion.toJson
 import eu.europa.ec.eudi.verifier.endpoint.domain.*
 import eu.europa.ec.eudi.verifier.endpoint.port.input.*
 import kotlinx.serialization.Required
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
+import org.springframework.http.MediaType.APPLICATION_FORM_URLENCODED
 import org.springframework.http.MediaType.APPLICATION_JSON
 import org.springframework.http.MediaType.IMAGE_PNG
+import org.springframework.util.MultiValueMap
 import org.springframework.web.reactive.function.server.*
 import org.springframework.web.reactive.function.server.ServerResponse.*
 import kotlin.jvm.optionals.getOrNull
@@ -33,64 +40,146 @@ internal class VerifierApi(
     private val initTransaction: InitTransaction,
     private val getWalletResponse: GetWalletResponse,
     private val getPresentationEvents: GetPresentationEvents,
+    private val postWalletResponse: PostWalletResponse,
 ) {
-
     private val logger: Logger = LoggerFactory.getLogger(VerifierApi::class.java)
-    val route = coRouter {
-        POST(
-            INIT_TRANSACTION_PATH,
-            contentType(APPLICATION_JSON) and accept(APPLICATION_JSON, IMAGE_PNG),
-        ) { request -> handleInitTransaction(request, VerifierApiVersion.V1) }
-        POST(
-            INIT_TRANSACTION_PATH_V2,
-            contentType(APPLICATION_JSON) and accept(APPLICATION_JSON, IMAGE_PNG),
-        ) { request -> handleInitTransaction(request, VerifierApiVersion.V2) }
+    val route =
+        coRouter {
+            POST(
+                INIT_TRANSACTION_PATH,
+                contentType(APPLICATION_JSON) and accept(APPLICATION_JSON, IMAGE_PNG),
+            ) { request -> handleInitTransaction(request, VerifierApiVersion.V1) }
+            POST(
+                INIT_TRANSACTION_PATH_V2,
+                contentType(APPLICATION_JSON) and accept(APPLICATION_JSON, IMAGE_PNG),
+            ) { request -> handleInitTransaction(request, VerifierApiVersion.V2) }
+            POST(
+                INIT_TRANSACTION_PATH_DC_API,
+                contentType(APPLICATION_JSON) and accept(APPLICATION_JSON),
+            ) { request -> handleInitDCApiTransaction(request) }
 
-        GET(WALLET_RESPONSE_PATH, accept(APPLICATION_JSON), this@VerifierApi::handleGetWalletResponse)
-        GET(EVENTS_RESPONSE_PATH, accept(APPLICATION_JSON), this@VerifierApi::handleGetPresentationEvents)
-    }
+            POST(
+                DC_API_WALLET_RESPONSE_PATH,
+                contentType(APPLICATION_FORM_URLENCODED) and accept(APPLICATION_JSON),
+            ) { request -> handlePostDCApiWalletResponse(request) }
 
-    private suspend fun handleInitTransaction(request: ServerRequest, version: VerifierApiVersion): ServerResponse = try {
-        val accept = request.headers().accept()
-        val output = when {
-            IMAGE_PNG in accept -> Output.QrCode
-            else -> Output.Json
+            GET(WALLET_RESPONSE_PATH, accept(APPLICATION_JSON), this@VerifierApi::handleGetWalletResponse)
+            GET(EVENTS_RESPONSE_PATH, accept(APPLICATION_JSON), this@VerifierApi::handleGetPresentationEvents)
         }
-        val input = request.awaitBody<InitTransactionTO>().copy(output = output)
 
-        logger.info("Handling InitTransaction nonce=${input.nonce} ... ")
-        initTransaction(input).fold(
-            ifRight = {
+    private suspend fun handleInitTransaction(
+        request: ServerRequest,
+        version: VerifierApiVersion,
+    ): ServerResponse =
+        effect {
+            val accept = request.headers().accept()
+            val output =
+                when {
+                    IMAGE_PNG in accept -> Output.QrCode
+                    else -> Output.Json
+                }
+            val input = request.awaitBody<InitTransactionTO>().copy(output = output)
+
+            logger.info("Handling InitTransaction nonce=${input.nonce} ... ")
+            initTransaction(input)
+        }.fold(
+            transform = {
                 when (it) {
                     is InitTransactionResponse.JwtSecuredAuthorizationRequestTO -> {
                         logger.info("Initiated transaction tx ${it.transactionId}")
-                        val response = when (version) {
-                            VerifierApiVersion.V1 -> JwtSecuredAuthorizationRequestV1TO.from(it)
-                            VerifierApiVersion.V2 -> it
-                        }
-                        ok().json()
+                        val response =
+                            when (version) {
+                                VerifierApiVersion.V1 -> JwtSecuredAuthorizationRequestV1TO.from(it)
+                                VerifierApiVersion.V2 -> it
+                            }
+                        ok()
+                            .json()
                             .header(TRANSACTION_ID_HEADER, it.transactionId)
                             .apply {
                                 if (VerifierApiVersion.V2 == version) {
                                     header(AUTHORIZATION_REQUEST_URI_HEADER, it.authorizationRequestUri)
                                 }
-                            }
-                            .bodyValueAndAwait(response)
+                            }.bodyValueAndAwait(response)
                     }
+
                     is InitTransactionResponse.QrCode -> {
                         logger.info("Initiated transaction with qr image")
-                        ok().contentType(IMAGE_PNG)
+                        ok()
+                            .contentType(IMAGE_PNG)
                             .header(TRANSACTION_ID_HEADER, it.transactionId)
                             .header(AUTHORIZATION_REQUEST_URI_HEADER, it.authorizationRequestUri)
                             .bodyValueAndAwait(it.qrCode)
                     }
                 }
             },
-            ifLeft = { it.asBadRequest() },
+            recover = { it.asBadRequest() },
+            catch = { t ->
+                if (t is SerializationException) {
+                    logger.warn("While handling InitTransaction", t)
+                    badRequest().buildAndAwait()
+                } else {
+                    throw t
+                }
+            },
         )
-    } catch (t: SerializationException) {
-        logger.warn("While handling InitTransaction", t)
-        badRequest().buildAndAwait()
+
+    private suspend fun handleInitDCApiTransaction(request: ServerRequest): ServerResponse =
+        effect {
+            val input = request.awaitBody<InitDcApiTransactionTO>()
+
+            logger.info("Handling InitDCApiTransaction nonce=${input.nonce} ... ")
+            initTransaction(input)
+        }.fold(
+            transform = {
+                ok()
+                    .header(TRANSACTION_ID_HEADER, it.transactionId)
+                    .json()
+                    .bodyValueAndAwait(it)
+            },
+            recover = { it.asBadRequest() },
+            catch = { t ->
+                if (t is SerializationException) {
+                    logger.warn("While handling InitDCApiTransaction", t)
+                    badRequest().buildAndAwait()
+                } else {
+                    throw t
+                }
+            },
+        )
+
+    private suspend fun handlePostDCApiWalletResponse(req: ServerRequest): ServerResponse {
+        val transactionId = req.transactionId()
+        return effect {
+            logger.info("Handling PostDCApiWalletResponse for tx ${transactionId.value} ...")
+            val walletResponse = req.awaitFormData().walletResponse()
+            postWalletResponse(PresentationLookup.ByTransactionId(transactionId), walletResponse)
+        }.fold(
+            transform = { ok().buildAndAwait() },
+            recover = { error ->
+                logger.warn("PostDCApiWalletResponse failed for tx ${transactionId.value}: $error")
+                badRequest().json().bodyValueAndAwait(error.toJson())
+            },
+        )
+    }
+
+    private fun MultiValueMap<String, String>.walletResponse(): AuthorisationResponse {
+        fun dcApi(): AuthorisationResponse.DcApi {
+            fun String.toJsonObject(): JsonObject = Json.decodeFromString<JsonObject>(this)
+
+            return AuthorisationResponseTO(
+                state = null,
+                vpToken = getFirst("vp_token")?.toJsonObject(),
+                error = getFirst("error"),
+                errorDescription = getFirst("error_description"),
+            ).run { AuthorisationResponse.DcApi(this) }
+        }
+
+        fun dcApiJwt() =
+            getFirst("response")?.let { jwt ->
+                AuthorisationResponse.DcApiJwt(jwt)
+            }
+
+        return dcApiJwt() ?: dcApi()
     }
 
     /**
@@ -131,6 +220,8 @@ internal class VerifierApi(
     companion object {
         const val INIT_TRANSACTION_PATH = "/ui/presentations"
         const val INIT_TRANSACTION_PATH_V2 = "/ui/presentations/v2"
+        const val INIT_TRANSACTION_PATH_DC_API = "/ui/presentations/dc-api"
+        const val DC_API_WALLET_RESPONSE_PATH = "/ui/presentations/{transactionId}/dc-api"
         const val WALLET_RESPONSE_PATH = "/ui/presentations/{transactionId}"
         const val EVENTS_RESPONSE_PATH = "/ui/presentations/{transactionId}/events"
 
@@ -143,42 +234,76 @@ internal class VerifierApi(
         private fun ServerRequest.transactionId() = TransactionId(pathVariable("transactionId"))
 
         private suspend fun ValidationError.asBadRequest(): ServerResponse {
-            val error = when (this) {
-                ValidationError.MissingPresentationQuery ->
-                    "MissingPresentationQuery"
-                ValidationError.MissingNonce ->
-                    "MissingNonce"
-                ValidationError.InvalidWalletResponseTemplate ->
-                    "InvalidWalletResponseTemplate"
-                ValidationError.InvalidTransactionData ->
-                    "InvalidTransactionData"
-                ValidationError.UnsupportedFormat ->
-                    "UnsupportedFormat"
-                ValidationError.InvalidIssuerChain ->
-                    "InvalidIssuerChain"
-                ValidationError.ContainsBothAuthorizationRequestUriAndAuthorizationRequestScheme ->
-                    "ContainsBothAuthorizationRequestUriAndAuthorizationRequestScheme"
-                ValidationError.InvalidAuthorizationRequestUri ->
-                    "InvalidAuthorizationRequestUri"
-                ValidationError.InvalidAuthorizationRequestScheme ->
-                    "InvalidAuthorizationRequestScheme"
-                ValidationError.HaipNotSupported.SdJwtVcOrMsoMdocMustBeSupported ->
-                    "HaipNotSupported.SdJwtVcOrMsoMdocMustBeSupported"
-                ValidationError.HaipNotSupported.JwsAlgorithmES256MustBeSupported ->
-                    "HaipNotSupported.JwsAlgorithmES256MustBeSupported"
-                ValidationError.HaipNotSupported.ClientIdPrefixX509HashMustBeUsed ->
-                    "HaipNotSupported.ClientIdPrefixX509HashMustBeUsed"
-                ValidationError.HaipNotSupported.SelfSignedCertificateMustNotBeUsed ->
-                    "HaipNotSupported.SelfSignedCertificateMustNotBeUsed"
-                ValidationError.HaipNotSupported.EncryptionAlgorithmECDHESMustBeSupported ->
-                    "HaipNotSupported.EncryptionAlgorithmECDHESMustBeSupported"
-                ValidationError.HaipNotSupported.EncryptionMethodsA128GCMAndA256GCMMustBeSupported ->
-                    "HaipNotSupported.EncryptionMethodsA128GCMAndA256GCMMustBeSupported"
-                ValidationError.HaipNotSupported.ResponseModeDirectPostJwtMustBeUsed ->
-                    "HaipNotSupported.ResponseModeDirectPostJwtMustBeUsed"
-                ValidationError.HaipNotSupported.AuthorizationRequestMustBeProvidedByReference ->
-                    "HaipNotSupported.AuthorizationRequestMustBeProvidedByReference"
-            }
+            val error =
+                when (this) {
+                    ValidationError.MissingPresentationQuery -> {
+                        "MissingPresentationQuery"
+                    }
+
+                    ValidationError.MissingNonce -> {
+                        "MissingNonce"
+                    }
+
+                    ValidationError.InvalidWalletResponseTemplate -> {
+                        "InvalidWalletResponseTemplate"
+                    }
+
+                    ValidationError.InvalidTransactionData -> {
+                        "InvalidTransactionData"
+                    }
+
+                    ValidationError.UnsupportedFormat -> {
+                        "UnsupportedFormat"
+                    }
+
+                    ValidationError.InvalidIssuerChain -> {
+                        "InvalidIssuerChain"
+                    }
+
+                    ValidationError.ContainsBothAuthorizationRequestUriAndAuthorizationRequestScheme -> {
+                        "ContainsBothAuthorizationRequestUriAndAuthorizationRequestScheme"
+                    }
+
+                    ValidationError.InvalidAuthorizationRequestUri -> {
+                        "InvalidAuthorizationRequestUri"
+                    }
+
+                    ValidationError.InvalidAuthorizationRequestScheme -> {
+                        "InvalidAuthorizationRequestScheme"
+                    }
+
+                    ValidationError.HaipNotSupported.SdJwtVcOrMsoMdocMustBeSupported -> {
+                        "HaipNotSupported.SdJwtVcOrMsoMdocMustBeSupported"
+                    }
+
+                    ValidationError.HaipNotSupported.JwsAlgorithmES256MustBeSupported -> {
+                        "HaipNotSupported.JwsAlgorithmES256MustBeSupported"
+                    }
+
+                    ValidationError.HaipNotSupported.ClientIdPrefixX509HashMustBeUsed -> {
+                        "HaipNotSupported.ClientIdPrefixX509HashMustBeUsed"
+                    }
+
+                    ValidationError.HaipNotSupported.SelfSignedCertificateMustNotBeUsed -> {
+                        "HaipNotSupported.SelfSignedCertificateMustNotBeUsed"
+                    }
+
+                    ValidationError.HaipNotSupported.EncryptionAlgorithmECDHESMustBeSupported -> {
+                        "HaipNotSupported.EncryptionAlgorithmECDHESMustBeSupported"
+                    }
+
+                    ValidationError.HaipNotSupported.EncryptionMethodsA128GCMAndA256GCMMustBeSupported -> {
+                        "HaipNotSupported.EncryptionMethodsA128GCMAndA256GCMMustBeSupported"
+                    }
+
+                    ValidationError.HaipNotSupported.ResponseModeDirectPostJwtMustBeUsed -> {
+                        "HaipNotSupported.ResponseModeDirectPostJwtMustBeUsed"
+                    }
+
+                    ValidationError.HaipNotSupported.AuthorizationRequestMustBeProvidedByReference -> {
+                        "HaipNotSupported.AuthorizationRequestMustBeProvidedByReference"
+                    }
+                }
             return badRequest().json().bodyValueAndAwait(mapOf("error" to error))
         }
     }
@@ -198,12 +323,13 @@ private data class JwtSecuredAuthorizationRequestV1TO(
     @SerialName(OpenId4VPSpec.REQUEST_URI_METHOD) val requestUriMethod: RequestUriMethodTO?,
 ) {
     companion object {
-        fun from(to: InitTransactionResponse.JwtSecuredAuthorizationRequestTO) = JwtSecuredAuthorizationRequestV1TO(
-            transactionId = to.transactionId,
-            clientId = to.clientId,
-            request = to.request,
-            requestUri = to.requestUri,
-            requestUriMethod = to.requestUriMethod,
-        )
+        fun from(to: InitTransactionResponse.JwtSecuredAuthorizationRequestTO) =
+            JwtSecuredAuthorizationRequestV1TO(
+                transactionId = to.transactionId,
+                clientId = to.clientId,
+                request = to.request,
+                requestUri = to.requestUri,
+                requestUriMethod = to.requestUriMethod,
+            )
     }
 }

@@ -13,17 +13,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package eu.europa.ec.eudi.verifier.endpoint.port.out.x509
-
-import arrow.core.Either
-import arrow.core.NonEmptyList
-import arrow.core.raise.Raise
-import eu.europa.ec.eudi.verifier.endpoint.port.input.ValidationError
-import java.security.cert.X509Certificate
+package eu.europa.ec.eudi.verifier.endpoint.domain
 
 /**
- * Parses PEM encoded X509 Certificates.
+ * [OAuth 2.0 Rich Authorization Requests](https://www.rfc-editor.org/rfc/rfc9396.html)
  */
-fun interface ParsePemEncodedX509Certificates {
-    operator fun invoke(certificates: String): NonEmptyList<X509Certificate>
+object RFC9396 {
+    const val LOCATIONS = "locations"
 }

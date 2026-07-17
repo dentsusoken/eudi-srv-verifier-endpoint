@@ -15,8 +15,7 @@
  */
 package eu.europa.ec.eudi.verifier.endpoint.adapter.out.jose
 
-import arrow.core.Either
-import arrow.core.flatMap
+import arrow.core.NonEmptyList
 import com.nimbusds.jose.*
 import com.nimbusds.jose.crypto.ECDHEncrypter
 import com.nimbusds.jose.crypto.RSAEncrypter
@@ -39,101 +38,133 @@ import eu.europa.ec.eudi.verifier.endpoint.adapter.out.json.toJackson
 import eu.europa.ec.eudi.verifier.endpoint.adapter.out.x509.dropRootCAIfPresent
 import eu.europa.ec.eudi.verifier.endpoint.domain.*
 import eu.europa.ec.eudi.verifier.endpoint.port.out.jose.CreateJar
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlin.time.Instant
 import com.nimbusds.oauth2.sdk.ResponseMode as NimbusResponseMode
 
 /**
  * An implementation of [CreateJar] that uses Nimbus SDK
  */
-class CreateJarNimbus : CreateJar {
-
-    override fun invoke(
-        verifierConfig: VerifierConfig,
-        clock: Clock,
-        presentation: Presentation.Requested,
+class CreateJarNimbus(
+    private val verifierConfig: VerifierConfig,
+) : CreateJar {
+    override suspend fun invoke(
+        issuedAt: Instant,
+        transactionData: NonEmptyList<TransactionData>?,
+        channel: Channel,
+        query: DCQL,
+        nonce: Nonce,
         walletNonce: String?,
         walletJarEncryptionRequirement: EncryptionRequirement,
-    ): Either<Throwable, Jwt> {
-        val requestObject = requestObjectFromDomain(verifierConfig, clock, presentation)
-        val signedJar = sign(verifierConfig.clientMetaData, presentation.responseMode, requestObject, walletNonce)
-        return when (walletJarEncryptionRequirement) {
-            EncryptionRequirement.NotRequired -> signedJar.map { it.serialize() }
-            is EncryptionRequirement.Required -> signedJar.flatMap { encrypt(walletJarEncryptionRequirement, it) }.map { it.serialize() }
+    ): Jwt =
+        withContext(Dispatchers.Default) {
+            val requestObject =
+                context(verifierConfig) {
+                    requestObjectFromDomain(issuedAt, transactionData, channel, query, nonce)
+                }
+            val responseMode = channel.responseMode
+            val signedJar = sign(responseMode, requestObject, walletNonce)
+            when (walletJarEncryptionRequirement) {
+                EncryptionRequirement.NotRequired -> signedJar.serialize()
+                is EncryptionRequirement.Required -> encrypt(walletJarEncryptionRequirement, signedJar).serialize()
+            }
         }
-    }
 
     internal fun sign(
-        clientMetaData: ClientMetaData,
         responseMode: ResponseMode,
         requestObject: RequestObject,
         walletNonce: String?,
-    ): Either<Throwable, SignedJWT> = Either.catch {
+    ): SignedJWT {
         val (key, algorithm) = requestObject.verifierId.accessCertificate
-        val header = JWSHeader.Builder(algorithm)
-            .apply {
-                when (requestObject.verifierId) {
-                    is VerifierId.PreRegistered -> keyID(key.keyID)
-                    is VerifierId.X509SanDns, is VerifierId.X509Hash -> x509CertChain(
-                        key.parsedX509CertChain.dropRootCAIfPresent().map { Base64.encode(it.encoded) },
-                    )
-                }
-            }
-            .type(JOSEObjectType(RFC9101.REQUEST_OBJECT_MEDIA_SUBTYPE))
-            .build()
-        val claimSet = asClaimSet(toNimbus(clientMetaData, responseMode), requestObject, walletNonce)
+        val header =
+            JWSHeader
+                .Builder(algorithm)
+                .apply {
+                    when (requestObject.verifierId) {
+                        is VerifierId.PreRegistered -> {
+                            keyID(key.keyID)
+                        }
 
-        SignedJWT(header, claimSet).apply { sign(DefaultJWSSignerFactory().createJWSSigner(key, algorithm)) }
+                        is VerifierId.X509SanDns, is VerifierId.X509Hash -> {
+                            x509CertChain(
+                                key.parsedX509CertChain.dropRootCAIfPresent().map { Base64.encode(it.encoded) },
+                            )
+                        }
+                    }
+                    type(JOSEObjectType(RFC9101.REQUEST_OBJECT_MEDIA_SUBTYPE))
+                }.build()
+        val clientMetaData = verifierConfig.clientMetaData
+
+        val claimSet = asClaimSet(toNimbus(clientMetaData, responseMode), requestObject, walletNonce)
+        return SignedJWT(header, claimSet).apply { sign(DefaultJWSSignerFactory().createJWSSigner(key, algorithm)) }
     }
 
     internal fun encrypt(
         walletJarEncryptionRequirement: EncryptionRequirement.Required,
         signed: SignedJWT,
-    ): Either<Throwable, JWEObject> = Either.catch {
+    ): JWEObject {
         val (walletJarEncryptionKey, encryptionAlgorithm, encryptionMethod) = walletJarEncryptionRequirement
-        val encrypter = when (walletJarEncryptionKey) {
-            is RSAKey -> RSAEncrypter(walletJarEncryptionKey)
-            is ECKey -> ECDHEncrypter(walletJarEncryptionKey)
-            is OctetKeyPair -> X25519Encrypter(walletJarEncryptionKey)
-            else -> error("Unsupported JWK type '${walletJarEncryptionKey::javaClass.name}'")
-        }
+        val encrypter =
+            when (walletJarEncryptionKey) {
+                is RSAKey -> RSAEncrypter(walletJarEncryptionKey)
+                is ECKey -> ECDHEncrypter(walletJarEncryptionKey)
+                is OctetKeyPair -> X25519Encrypter(walletJarEncryptionKey)
+                else -> error("Unsupported JWK type '${walletJarEncryptionKey.javaClass.name}'")
+            }
 
-        val header = JWEHeader.Builder(encryptionAlgorithm, encryptionMethod)
-            .contentType("JWT")
-            .build()
+        val header =
+            JWEHeader
+                .Builder(encryptionAlgorithm, encryptionMethod)
+                .contentType("JWT")
+                .build()
         val payload = Payload(signed)
 
-        JWEObject(header, payload).apply { encrypt(encrypter) }
+        return JWEObject(header, payload).apply { encrypt(encrypter) }
     }
 
     /**
      * Maps a [RequestObject] into a Nimbus [JWTClaimsSet]
      */
-    private fun asClaimSet(clientMetaData: OIDCClientMetadata?, r: RequestObject, walletNonce: String?): JWTClaimsSet {
-        val responseType = ResponseType(*r.responseType.map { ResponseType.Value(it) }.toTypedArray())
-        val clientId = ClientID(r.verifierId.clientId)
-        val scope = Scope(*r.scope.map { Scope.Value(it) }.toTypedArray())
-        val state = State(r.state)
+    private fun asClaimSet(
+        clientMetaData: OIDCClientMetadata?,
+        requestObject: RequestObject,
+        walletNonce: String?,
+    ): JWTClaimsSet {
+        val responseType = ResponseType(*requestObject.responseType.map { ResponseType.Value(it) }.toTypedArray())
+        val clientId = ClientID(requestObject.verifierId.clientId)
+        val scope = Scope(*requestObject.scope.map { Scope.Value(it) }.toTypedArray())
+        val state = requestObject.state?.let { State(requestObject.state) }
+        val expectedOrigins = requestObject.expectedOrigins?.takeIf { it.isNotEmpty() }
 
-        val authorizationRequestClaims = with(AuthorizationRequest.Builder(responseType, clientId)) {
-            state(state)
-            if (scope.isNotEmpty()) {
-                scope(scope)
-            }
-            responseMode(NimbusResponseMode(r.responseMode))
-            build()
-        }.toJWTClaimsSet()
+        val authorizationRequestClaims =
+            with(AuthorizationRequest.Builder(responseType, clientId)) {
+                if (state != null) {
+                    state(state)
+                }
+                if (scope.isNotEmpty()) {
+                    scope(scope)
+                }
+                responseMode(NimbusResponseMode(requestObject.responseMode))
+                build()
+            }.toJWTClaimsSet()
 
         return with(JWTClaimsSet.Builder(authorizationRequestClaims)) {
-            fun optionalClaim(c: String, v: Any?) {
+            fun optionalClaim(
+                c: String,
+                v: Any?,
+            ) {
                 v?.let { claim(c, it) }
             }
-            issueTime(r.issuedAt.toJavaDate())
-            audience(r.aud)
-            claim(OpenId4VPSpec.NONCE, r.nonce)
+            issueTime(requestObject.issuedAt.toJavaDate())
+            audience(requestObject.audience)
+            claim(OpenId4VPSpec.NONCE, requestObject.nonce)
             optionalClaim(OpenId4VPSpec.CLIENT_METADATA, clientMetaData?.toJSONObject())
-            optionalClaim(OpenId4VPSpec.RESPONSE_URI, r.responseUri?.toExternalForm())
-            optionalClaim(OpenId4VPSpec.DCQL_QUERY, r.dcqlQuery?.toJackson())
-            optionalClaim(OpenId4VPSpec.TRANSACTION_DATA, r.transactionData?.toJackson())
+            optionalClaim(OpenId4VPSpec.RESPONSE_URI, requestObject.responseUri?.toExternalForm())
+            claim(OpenId4VPSpec.DCQL_QUERY, requestObject.query.toJackson())
+            optionalClaim(OpenId4VPSpec.TRANSACTION_DATA, requestObject.transactionData?.toJackson())
             optionalClaim(OpenId4VPSpec.WALLET_NONCE, walletNonce)
+            optionalClaim(OpenId4VPSpec.DCAPI_EXPECTED_ORIGINS, expectedOrigins?.toJackson())
             build()
         }
     }
@@ -141,17 +172,25 @@ class CreateJarNimbus : CreateJar {
     private fun toNimbus(
         c: ClientMetaData,
         responseMode: ResponseMode,
-    ): OIDCClientMetadata {
-        return OIDCClientMetadata().apply {
-            if (responseMode is ResponseMode.DirectPostJwt) {
-                jwkSet = JWKSet(listOf(responseMode.ephemeralResponseEncryptionKey)).toPublicJWKSet()
+    ): OIDCClientMetadata =
+        OIDCClientMetadata().apply {
+            val ephemeralResponseEncryptionKey =
+                when (responseMode) {
+                    is ResponseMode.OverHttp.DirectPostJwt -> responseMode.ephemeralResponseEncryptionKey
+                    is ResponseMode.OverDcApi.DcApiJwt -> responseMode.ephemeralResponseEncryptionKey
+                    else -> null
+                }
+
+            ephemeralResponseEncryptionKey?.let { encryptionKey ->
+                jwkSet = JWKSet(listOf(encryptionKey)).toPublicJWKSet()
                 setCustomField(
                     OpenId4VPSpec.ENCRYPTED_RESPONSE_ENC_VALUES_SUPPORTED,
-                    c.responseEncryptionOption.encryptionMethods.map { it.name }.toList(),
+                    c.responseEncryptionOption.encryptionMethods
+                        .map { it.name }
+                        .toList(),
                 )
             }
 
             setCustomField(OpenId4VPSpec.VP_FORMATS_SUPPORTED, c.vpFormatsSupported.toJackson())
         }
-    }
 }

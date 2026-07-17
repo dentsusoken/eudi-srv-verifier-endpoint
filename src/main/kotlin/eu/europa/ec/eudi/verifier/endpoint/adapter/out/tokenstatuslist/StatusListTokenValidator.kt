@@ -15,7 +15,10 @@
  */
 package eu.europa.ec.eudi.verifier.endpoint.adapter.out.tokenstatuslist
 
+import arrow.core.raise.Raise
 import arrow.core.raise.catch
+import arrow.core.raise.context.ensure
+import arrow.core.raise.context.raise
 import com.nimbusds.jwt.SignedJWT
 import eu.europa.ec.eudi.sdjwt.SdJwtAndKbJwt
 import eu.europa.ec.eudi.statium.GetStatus
@@ -31,50 +34,122 @@ import eu.europa.ec.eudi.verifier.endpoint.port.out.persistence.PresentationEven
 import eu.europa.ec.eudi.verifier.endpoint.port.out.persistence.PublishPresentationEvent
 import id.walt.mdoc.doc.MDoc
 import io.ktor.client.*
+import kotlin.time.Duration.Companion.seconds
 
-data class StatusCheckException(val reason: String, val causedBy: Throwable) : Exception(reason, causedBy)
+sealed interface StatusValidationError {
+    /**
+     * Indicate the Status of a Document is not Valid. (i.e. most likely has been Revoked, or Suspended, etc...)
+     */
+    data class StatusNotValid(
+        val status: Status,
+    ) : StatusValidationError {
+        init {
+            require(Status.Valid != status)
+        }
+    }
+
+    /**
+     * Indicates the Status List Token could not be checked
+     */
+    class StatusCheckException(
+        message: String,
+        cause: Throwable,
+    ) : Exception(message, cause),
+        StatusValidationError
+}
 
 class StatusListTokenValidator(
     private val httpClient: HttpClient,
     private val clock: Clock,
     private val publishPresentationEvent: PublishPresentationEvent,
 ) {
+    context(_: Raise<StatusValidationError>)
+    suspend fun validate(
+        sdJwtVc: SdJwtAndKbJwt<SignedJWT>,
+        transactionId: TransactionId?,
+    ): Status.Valid =
+        sdJwtVc
+            .statusReference()
+            ?.validate(transactionId, StatusListTokenFormat.JWT)
+            ?: Status.Valid
 
-    suspend fun validate(sdJwtVc: SdJwtAndKbJwt<SignedJWT>, transactionId: TransactionId?) =
-        sdJwtVc.statusReference()?.validate(transactionId)
+    context(_: Raise<StatusValidationError>)
+    suspend fun validate(
+        mdoc: MDoc,
+        transactionId: TransactionId?,
+    ): Status.Valid =
+        mdoc.issuerSigned.issuerAuth
+            ?.tokenStatusListReference()
+            ?.validate(transactionId, StatusListTokenFormat.CWT)
+            ?: Status.Valid
 
-    suspend fun validate(mdoc: MDoc, transactionId: TransactionId?) =
-        mdoc.issuerSigned.issuerAuth?.tokenStatusListReference()?.validate(transactionId)
+    context(_: Raise<StatusValidationError>)
+    private suspend fun StatusReference.validate(
+        transactionId: TransactionId?,
+        format: StatusListTokenFormat,
+    ): Status.Valid {
+        val currentStatus =
+            catch({
+                with(getStatus(format)) { currentStatus().getOrThrow() }
+            }) { error ->
+                transactionId?.let { logStatusCheckFailed(it, this@validate, error) }
+                raise(
+                    StatusValidationError.StatusCheckException(
+                        "Attestation status check failed, ${error.message}",
+                        error,
+                    ),
+                )
+            }
 
-    private suspend fun StatusReference.validate(transactionId: TransactionId?) {
-        catch({
-            val currentStatus = with(getStatus()) { currentStatus().getOrThrow() }
-            require(currentStatus == Status.Valid) { "Attestation status expected to be VALID but is $currentStatus" }
-            transactionId?.let { logStatusCheckSuccess(it, this) }
-        }) { error ->
-            transactionId?.let { logStatusCheckFailed(it, this, error) }
-            throw StatusCheckException("Attestation status check failed, ${error.message}", error)
-        }
+        ensure(currentStatus == Status.Valid) { StatusValidationError.StatusNotValid(currentStatus) }
+        transactionId?.let { logStatusCheckSuccess(it, this@validate) }
+        return Status.Valid
     }
 
-    private fun getStatus(): GetStatus {
-        val getStatusListToken: GetStatusListToken = GetStatusListToken.usingJwt(
-            clock = clock.asKotlinClock(),
-            httpClient = httpClient,
-            verifyStatusListTokenSignature = { _, _ ->
-                Result.success(Unit)
-            },
-        )
+    private fun getStatus(format: StatusListTokenFormat): GetStatus {
+        val getStatusListToken =
+            when (format) {
+                StatusListTokenFormat.JWT -> {
+                    GetStatusListToken.usingJwt(
+                        clock = clock.asKotlinClock(),
+                        httpClient = httpClient,
+                        verifyStatusListTokenSignature = { _, _ -> Result.success(Unit) },
+                        allowedClockSkew = 15.seconds,
+                    )
+                }
+
+                StatusListTokenFormat.CWT -> {
+                    GetStatusListToken.usingCwt(
+                        clock = clock.asKotlinClock(),
+                        httpClient = httpClient,
+                        verifyStatusListTokenSignature = { _, _ -> Result.success(Unit) },
+                        allowedClockSkew = 15.seconds,
+                    )
+                }
+            }
         return GetStatus(getStatusListToken)
     }
 
-    private suspend fun logStatusCheckSuccess(transactionId: TransactionId, statusReference: StatusReference) {
+    private suspend fun logStatusCheckSuccess(
+        transactionId: TransactionId,
+        statusReference: StatusReference,
+    ) {
         val event = PresentationEvent.AttestationStatusCheckSuccessful(transactionId, clock.now(), statusReference)
         publishPresentationEvent(event)
     }
 
-    private suspend fun logStatusCheckFailed(transactionId: TransactionId, statusReference: StatusReference, error: Throwable) {
-        val event = PresentationEvent.AttestationStatusCheckFailed(transactionId, clock.now(), statusReference, error.message)
+    private suspend fun logStatusCheckFailed(
+        transactionId: TransactionId,
+        statusReference: StatusReference,
+        error: Throwable,
+    ) {
+        val event =
+            PresentationEvent.AttestationStatusCheckFailed(transactionId, clock.now(), statusReference, error.message)
         publishPresentationEvent(event)
     }
+}
+
+private enum class StatusListTokenFormat {
+    JWT,
+    CWT,
 }
