@@ -18,11 +18,14 @@ package eu.europa.ec.eudi.verifier.endpoint.adapter.input.web
 import eu.europa.ec.eudi.verifier.endpoint.adapter.input.web.VerifierApi.Companion.TRANSACTION_ID_HEADER
 import eu.europa.ec.eudi.verifier.endpoint.domain.ResponseCode
 import eu.europa.ec.eudi.verifier.endpoint.domain.TransactionId
+import eu.europa.ec.eudi.verifier.endpoint.port.input.InitDcApiTransactionResponseTO
+import eu.europa.ec.eudi.verifier.endpoint.port.input.InitDcApiTransactionTO
 import eu.europa.ec.eudi.verifier.endpoint.port.input.InitTransactionResponse
 import eu.europa.ec.eudi.verifier.endpoint.port.input.InitTransactionTO
 import eu.europa.ec.eudi.verifier.endpoint.port.input.Output
 import eu.europa.ec.eudi.verifier.endpoint.port.input.WalletResponseTO
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
@@ -33,38 +36,80 @@ import org.springframework.test.web.reactive.server.WebTestClient
 import org.springframework.test.web.reactive.server.expectBody
 
 object VerifierApiClient {
-
     private val log: Logger = LoggerFactory.getLogger(VerifierApiClient::class.java)
 
-    fun loadInitTransactionTO(testResource: String): InitTransactionTO =
+    fun loadInitTransactionTO(testResource: String): InitTransactionTO = Json.decodeFromString(TestUtils.loadResource(testResource))
+
+    fun loadInitDCApiTransactionTO(testResource: String): InitDcApiTransactionTO =
         Json.decodeFromString(TestUtils.loadResource(testResource))
+
+    /**
+     * Initializes a Digital Credentials API (DC API) Transaction.
+     *
+     * Posts an [InitDcApiTransactionTO] to [VerifierApi.INIT_TRANSACTION_PATH_DC_API] and returns
+     * the raw response body parsed as a [InitDcApiTransactionResponseTO] together with the value of the
+     * [TRANSACTION_ID_HEADER] response header.
+     */
+    fun initDCApiTransaction(
+        client: WebTestClient,
+        initDCApiTransactionTO: InitDcApiTransactionTO,
+    ): Pair<InitDcApiTransactionResponseTO, String> {
+        val result =
+            client
+                .post()
+                .uri(VerifierApi.INIT_TRANSACTION_PATH_DC_API)
+                .contentType(MediaType.APPLICATION_JSON)
+                .accept(MediaType.APPLICATION_JSON)
+                .bodyValue(initDCApiTransactionTO)
+                .exchange()
+                .expectStatus()
+                .isOk()
+                .expectBody<InitDcApiTransactionResponseTO>()
+                .returnResult()
+
+        val transactionId = checkNotNull(result.responseHeaders.getFirst(TRANSACTION_ID_HEADER))
+        val body = checkNotNull(result.responseBody)
+        log.info("DC API init response body:\n$body")
+        return body to transactionId
+    }
 
     fun initTransaction(
         client: WebTestClient,
         initTransactionTO: InitTransactionTO,
         output: Output = Output.Json,
     ): InitTransactionResponse {
-        val accept = when (output) {
-            Output.Json -> MediaType.APPLICATION_JSON
-            Output.QrCode -> MediaType.IMAGE_PNG
-        }
+        val accept =
+            when (output) {
+                Output.Json -> MediaType.APPLICATION_JSON
+                Output.QrCode -> MediaType.IMAGE_PNG
+            }
 
-        val responseSpec = client.post().uri(VerifierApi.INIT_TRANSACTION_PATH_V2)
-            .contentType(MediaType.APPLICATION_JSON)
-            .accept(accept)
-            .bodyValue(initTransactionTO)
-            .exchange()
+        val responseSpec =
+            client
+                .post()
+                .uri(VerifierApi.INIT_TRANSACTION_PATH_V2)
+                .contentType(MediaType.APPLICATION_JSON)
+                .accept(accept)
+                .bodyValue(initTransactionTO)
+                .exchange()
 
         return when (output) {
-            Output.Json ->
-                responseSpec.expectStatus().isOk()
+            Output.Json -> {
+                responseSpec
+                    .expectStatus()
+                    .isOk()
                     .expectBody<InitTransactionResponse.JwtSecuredAuthorizationRequestTO>()
                     .returnResult()
                     .responseBody!!
+            }
+
             Output.QrCode -> {
-                val response = responseSpec.expectStatus().isOk()
-                    .expectBody<ByteArray>()
-                    .returnResult()
+                val response =
+                    responseSpec
+                        .expectStatus()
+                        .isOk()
+                        .expectBody<ByteArray>()
+                        .returnResult()
 
                 val qrCode = checkNotNull(response.responseBody)
                 val transactionId = checkNotNull(response.responseHeaders.getFirst(TRANSACTION_ID_HEADER))
@@ -86,15 +131,22 @@ object VerifierApiClient {
      * - (request) mdocVerification application Internet frontend to Internet Web Service, flow "18 HTTPs POST to response_uri [section B.3.2.2]
      * - (response) Internet Web Service to mdocVerification application Internet frontend, flow "20 return status and conditionally return data"
      */
-    fun getWalletResponse(client: WebTestClient, presentationId: TransactionId, responseCode: ResponseCode? = null): WalletResponseTO? {
+    fun getWalletResponse(
+        client: WebTestClient,
+        presentationId: TransactionId,
+        responseCode: ResponseCode? = null,
+    ): WalletResponseTO? {
         val walletResponseUri =
             VerifierApi.WALLET_RESPONSE_PATH.replace("{transactionId}", presentationId.value) +
                 (responseCode?.let { "?response_code=${it.value}" } ?: "")
 
         // when
-        val responseSpec = client.get().uri(walletResponseUri)
-            .accept(MediaType.APPLICATION_JSON)
-            .exchange()
+        val responseSpec =
+            client
+                .get()
+                .uri(walletResponseUri)
+                .accept(MediaType.APPLICATION_JSON)
+                .exchange()
         val returnResult = responseSpec.expectBody<WalletResponseTO>().returnResult()
         returnResult.status.also { log.info("response status: $it") }
         returnResult.responseHeaders.also { log.info("response headers: $it") }
@@ -117,9 +169,12 @@ object VerifierApiClient {
                 (responseCode?.let { "?response_code=${it.value}" } ?: "")
 
         // when
-        val responseSpec = client.get().uri(walletResponseUri)
-            .accept(MediaType.APPLICATION_JSON)
-            .exchange()
+        val responseSpec =
+            client
+                .get()
+                .uri(walletResponseUri)
+                .accept(MediaType.APPLICATION_JSON)
+                .exchange()
         return responseSpec.expectBody<WalletResponseTO>().returnResult()
     }
 }

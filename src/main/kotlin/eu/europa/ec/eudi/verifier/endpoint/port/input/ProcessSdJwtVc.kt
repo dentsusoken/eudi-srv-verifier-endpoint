@@ -15,7 +15,6 @@
  */
 package eu.europa.ec.eudi.verifier.endpoint.port.input
 
-import arrow.core.Either
 import eu.europa.ec.eudi.sdjwt.DefaultSdJwtOps
 import eu.europa.ec.eudi.sdjwt.JwtAndClaims
 import eu.europa.ec.eudi.sdjwt.RFC9901
@@ -26,33 +25,35 @@ import eu.europa.ec.eudi.sdjwt.vc.TypeMetadataPolicy
 import kotlinx.serialization.json.JsonObject
 
 class ProcessSdJwtVc {
-    private val verifier = DefaultSdJwtOps.SdJwtVcVerifier(
-        IssuerVerificationMethod.usingCustom(DefaultSdJwtOps.NoSignatureValidation),
-        TypeMetadataPolicy.NotUsed,
-        checkStatus = null,
-    )
+    private val verifier =
+        DefaultSdJwtOps.SdJwtVcVerifier(
+            IssuerVerificationMethod.usingCustom(DefaultSdJwtOps.NoSignatureValidation),
+            TypeMetadataPolicy.NotUsed,
+            checkStatus = null,
+        )
 
-    suspend operator fun invoke(unprocessed: String): Either<Throwable, JsonObject> = Either.catch {
+    suspend operator fun invoke(unprocessed: String): JsonObject =
         if (unprocessed.endsWith(RFC9901.DISCLOSURE_SEPARATOR)) {
             verifier.processWithoutKeyBinding(unprocessed)
         } else {
             verifier.processWithKeyBinding(unprocessed)
         }
-    }
 
     private suspend fun SdJwtVcVerifier<JwtAndClaims>.processWithoutKeyBinding(unprocessed: String): JsonObject {
         val sdJwt = verify(unprocessed).getOrThrow()
-        val (processed, _) = with(DefaultSdJwtOps) {
-            sdJwt.recreateClaimsAndDisclosuresPerClaim()
-        }
+        val (processed, _) =
+            with(DefaultSdJwtOps) {
+                sdJwt.recreateClaimsAndDisclosuresPerClaim()
+            }
         return processed
     }
 
     private suspend fun SdJwtVcVerifier<JwtAndClaims>.processWithKeyBinding(unprocessed: String): JsonObject {
         val (sdJwt, _) = verify(unprocessed, challenge = null).getOrThrow()
-        val (processed, _) = with(DefaultSdJwtOps) {
-            sdJwt.recreateClaimsAndDisclosuresPerClaim()
-        }
+        val (processed, _) =
+            with(DefaultSdJwtOps) {
+                sdJwt.recreateClaimsAndDisclosuresPerClaim()
+            }
         return processed
     }
 }

@@ -15,6 +15,8 @@
  */
 package eu.europa.ec.eudi.verifier.endpoint.adapter.out.jose
 
+import arrow.core.NonEmptyList
+import com.eygraber.uri.Url
 import eu.europa.ec.eudi.verifier.endpoint.domain.*
 import java.net.URL
 import kotlin.time.Instant
@@ -22,41 +24,84 @@ import kotlin.time.Instant
 internal data class RequestObject(
     val verifierId: VerifierId,
     val responseType: List<String>,
-    val dcqlQuery: DCQL? = null,
+    val query: DCQL,
     val scope: List<String>,
     val nonce: String,
     val responseMode: String,
     val responseUri: URL?,
-    val aud: List<String>,
-    val state: String,
+    val audience: List<String>,
+    val state: String?,
     val issuedAt: Instant,
     val transactionData: List<String>? = null,
+    val expectedOrigins: List<Url>? = null,
 )
 
+context(verifierConfig: VerifierConfig)
 internal fun requestObjectFromDomain(
-    verifierConfig: VerifierConfig,
-    clock: Clock,
-    presentation: Presentation.Requested,
+    issuedAt: Instant,
+    transactionData: NonEmptyList<TransactionData>?,
+    channel: Channel,
+    query: DCQL,
+    nonce: Nonce,
 ): RequestObject {
     val scope = emptyList<String>()
     val responseType = listOf(OpenId4VPSpec.VP_TOKEN)
-    val aud = listOf("https://self-issued.me/v2")
-    val transactionData = presentation.transactionData?.map { it.base64Url }
+    val audience = listOf("https://self-issued.me/v2")
+    val transactionData = transactionData?.map { it.base64Url }
+    return when (channel) {
+        is Channel.OverDcApi -> {
+            RequestObject(
+                verifierId = verifierConfig.verifierId,
+                scope = scope,
+                query = query,
+                responseType = responseType,
+                audience = audience,
+                nonce = nonce.value,
+                state = null,
+                responseMode = OpenId4VPSpec.RESPONSE_MODE_DCAPI_JWT,
+                responseUri = null,
+                issuedAt = issuedAt,
+                transactionData = transactionData,
+                expectedOrigins = channel.expectedOrigins,
+            )
+        }
 
-    return RequestObject(
-        verifierId = verifierConfig.verifierId,
-        scope = scope,
-        dcqlQuery = presentation.query,
-        responseType = responseType,
-        aud = aud,
-        nonce = presentation.nonce.value,
-        state = presentation.requestId.value,
-        responseMode = when (presentation.responseMode) {
-            ResponseMode.DirectPost -> OpenId4VPSpec.RESPONSE_MODE_DIRECT_POST
-            is ResponseMode.DirectPostJwt -> OpenId4VPSpec.RESPONSE_MODE_DIRECT_POST_JWT
-        },
-        responseUri = verifierConfig.responseUriBuilder(presentation.requestId),
-        issuedAt = clock.now(),
-        transactionData = transactionData,
-    )
+        is Channel.OverHttp -> {
+            when (channel.responseMode) {
+                ResponseMode.OverHttp.DirectPost -> {
+                    RequestObject(
+                        verifierId = verifierConfig.verifierId,
+                        scope = scope,
+                        query = query,
+                        responseType = responseType,
+                        audience = audience,
+                        nonce = nonce.value,
+                        state = channel.requestId.value,
+                        responseMode = OpenId4VPSpec.RESPONSE_MODE_DIRECT_POST,
+                        responseUri = verifierConfig.responseUriBuilder(channel.requestId),
+                        issuedAt = issuedAt,
+                        transactionData = transactionData,
+                        expectedOrigins = null,
+                    )
+                }
+
+                is ResponseMode.OverHttp.DirectPostJwt -> {
+                    RequestObject(
+                        verifierId = verifierConfig.verifierId,
+                        scope = scope,
+                        query = query,
+                        responseType = responseType,
+                        audience = audience,
+                        nonce = nonce.value,
+                        state = channel.requestId.value,
+                        responseMode = OpenId4VPSpec.RESPONSE_MODE_DIRECT_POST_JWT,
+                        responseUri = verifierConfig.responseUriBuilder(channel.requestId),
+                        issuedAt = issuedAt,
+                        transactionData = transactionData,
+                        expectedOrigins = null,
+                    )
+                }
+            }
+        }
+    }
 }

@@ -109,7 +109,7 @@ variables of the service in [docker-compose.yaml](docker/docker-compose.yaml)
       - "8080:8080"
     environment:
       VERIFIER_PUBLICURL: "https://10.240.174.10"
-      VERIFIER_RESPONSE_MODE: "DirectPost"
+      VERIFIER_DEFAULTHTTPRESPONSEMODE: "DirectPost"
       VERIFIER_ACCESS_CERTIFICATE_KEYSTORE: file:///keystore.jks
 ```
 
@@ -125,7 +125,7 @@ To provide an external keystore mount it to the path designated by the value of 
       - "8080:8080"
     environment:
       VERIFIER_PUBLICURL: "https://10.240.174.10"
-      VERIFIER_RESPONSE_MODE: "DirectPost"
+      VERIFIER_DEFAULTHTTPRESPONSEMODE: "DirectPost"
       VERIFIER_ACCESS_CERTIFICATE_KEYSTORE: file:///certs/keystore.jks
       VERIFIER_ACCESS_CERTIFICATE_KEYSTORE_TYPE: "jks"
       VERIFIER_ACCESS_CERTIFICATE_KEYSTORE_PASSWORD: <PASSWORD OF KEYSTORE>
@@ -272,7 +272,7 @@ curl -X POST -H "Content-type: application/json" -d '{
         },
         "claims": [
           {
-            "path": ["eu.europa.ec.eudi.pid.1", "family_name"],
+            "path": ["eu.europa.ec.eudi.pid.1", "family_name"]
           }
         ]
       }
@@ -321,7 +321,7 @@ curl -X POST -H "Content-type: application/json" -H "Accept: image/png" -d '{
         },
         "claims": [
           {
-            "path": ["eu.europa.ec.eudi.pid.1", "family_name"],
+            "path": ["eu.europa.ec.eudi.pid.1", "family_name"]
           }
         ]
       }
@@ -590,8 +590,8 @@ Description: Default `request_uri_method` to use for a Presentation when one is 
 Possible values: `Get`, `Post`  
 Default value: `Get`  
 
-Variable: `VERIFIER_RESPONSE_MODE`  
-Description: How Authorization Responses are expected    
+Variable: `VERIFIER_DEFEAULTHTTPRESPONSEMODE`  
+Description: How Authorization Responses are expected for HTTP Presentation   
 Possible values: `DirectPost`, `DirectPostJwt`  
 Default value: `DirectPostJwt`
 
@@ -722,7 +722,7 @@ Notes:
 * Please ensure double quotes `"` are properly escaped in the environment variable value.  
 * More information about the JSON structure can be found in [AttestationClassifications](src/main/resources/public/openapi.json).  
 
-Example: `{"pid":{"vcts":["urn:eudi:pid:1"],"docTypes":["eu.europa.ec.eudi.pid.1"]},"qeaa":{"vcts":[],"docTypes":[]},"pubeaa":{"vcts":["urn:eudi:ehic:1"],"docTypes":[]},"eaa":[{"useCase":"mDL","vcts":[],"docTypes":["org.iso.18013.5.1.mDL"]},{"useCase":"learningCredential","vcts":["urn:eu.europa.ec.eudi:learning:credential:1"],"docTypes":[]}]}`  
+Example: `{"pid":{"vcts":["urn:eudi:pid:1"],"docTypes":["eu.europa.ec.eudi.pid.1"]},"qeaa":{"vcts":[],"docTypes":[]},"pubeaa":{"vcts":[],"docTypes":[]},"eaa":[{"useCase":"mDL","vcts":[],"docTypes":["org.iso.18013.5.1.mDL"]},{"useCase":"learningCredential","vcts":["urn:eu.europa.ec.eudi:learning:credential:1"],"docTypes":[]}]}`  
 
 Alternatively, you can use the following environment variables for more fine-grained control:
 

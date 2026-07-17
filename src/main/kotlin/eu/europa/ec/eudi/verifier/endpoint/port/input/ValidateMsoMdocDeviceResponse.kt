@@ -15,10 +15,11 @@
  */
 package eu.europa.ec.eudi.verifier.endpoint.port.input
 
-import arrow.core.Either
 import arrow.core.NonEmptyList
-import arrow.core.getOrElse
-import arrow.core.raise.either
+import arrow.core.raise.Raise
+import arrow.core.raise.catch
+import arrow.core.raise.context.raise
+import arrow.core.raise.context.withError
 import eu.europa.ec.eudi.verifier.endpoint.adapter.out.mso.DeviceResponseError
 import eu.europa.ec.eudi.verifier.endpoint.adapter.out.mso.DeviceResponseValidator
 import eu.europa.ec.eudi.verifier.endpoint.adapter.out.mso.DocumentError
@@ -29,14 +30,12 @@ import eu.europa.ec.eudi.verifier.endpoint.port.out.x509.ParsePemEncodedX509Cert
 import id.walt.mdoc.dataelement.*
 import id.walt.mdoc.doc.MDoc
 import kotlinx.datetime.atStartOfDayIn
+import kotlinx.datetime.toStdlibInstant
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.*
-import org.slf4j.LoggerFactory
 import java.security.cert.X509Certificate
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
-
-private val log = LoggerFactory.getLogger(ValidateMsoMdocDeviceResponse::class.java)
 
 /**
  * Indicates the reason why DeviceResponse failed to validate.
@@ -59,8 +58,7 @@ internal data class ValidationErrorTO(
     val invalidDocuments: List<InvalidDocumentTO>? = null,
 ) {
     companion object {
-        fun cannotBeDecoded(): ValidationErrorTO =
-            ValidationErrorTO(type = ValidationFailureErrorTypeTO.CannotBeDecoded)
+        fun cannotBeDecoded(): ValidationErrorTO = ValidationErrorTO(type = ValidationFailureErrorTypeTO.CannotBeDecoded)
 
         fun notOkDeviceResponseStatus(deviceResponseStatus: Int): ValidationErrorTO =
             ValidationErrorTO(
@@ -74,8 +72,7 @@ internal data class ValidationErrorTO(
                 invalidDocuments = invalidDocuments,
             )
 
-        fun invalidIssuerChain(): ValidationErrorTO =
-            ValidationErrorTO(type = ValidationFailureErrorTypeTO.InvalidIssuerChain)
+        fun invalidIssuerChain(): ValidationErrorTO = ValidationErrorTO(type = ValidationFailureErrorTypeTO.InvalidIssuerChain)
     }
 }
 
@@ -98,6 +95,7 @@ internal enum class DocumentErrorTO {
     DevicePublicKeyCannotBeParsed,
     InvalidDeviceSignature,
     MissingDeviceSigned,
+    DocumentStatusCheckFailed,
 }
 
 /**
@@ -120,14 +118,6 @@ internal data class DocumentTO(
 )
 
 /**
- * The outcome of trying to validate a DeviceResponse.
- */
-internal sealed interface DeviceResponseValidationResult {
-    data class Valid(val documents: JsonArray) : DeviceResponseValidationResult
-    data class Invalid(val error: ValidationErrorTO) : DeviceResponseValidationResult
-}
-
-/**
  * Tries to validate a value as an MSO MDoc DeviceResponse.
  */
 internal class ValidateMsoMdocDeviceResponse(
@@ -135,29 +125,33 @@ internal class ValidateMsoMdocDeviceResponse(
     private val parsePemEncodedX509Certificates: ParsePemEncodedX509Certificates,
     private val deviceResponseValidatorFactory: (NonEmptyList<X509Certificate>?) -> DeviceResponseValidator,
 ) {
-    suspend operator fun invoke(deviceResponse: String, issuerChain: String?): DeviceResponseValidationResult = either {
-        val validator = deviceResponseValidator(issuerChain)
-            .getOrElse {
-                return DeviceResponseValidationResult.Invalid(ValidationErrorTO.invalidIssuerChain())
+    context(_: Raise<ValidationErrorTO>)
+    suspend operator fun invoke(
+        deviceResponse: String,
+        issuerChain: String?,
+    ): JsonArray {
+        val validator =
+            deviceResponseValidator(issuerChain)
+
+        val documents =
+            withError({ error -> error.toValidationFailureTO() }) {
+                validator
+                    .ensureValid(deviceResponse)
+                    .map { Json.encodeToJsonElement(it.toDocumentTO(clock)) }
             }
 
-        val documents = validator.ensureValid(deviceResponse)
-            .mapLeft { it.toValidationFailureTO() }
-            .bind()
-            .map { Json.encodeToJsonElement(it.toDocumentTO(clock)) }
-            .let { JsonArray(it) }
-
-        documents
-    }.fold(
-        ifLeft = { DeviceResponseValidationResult.Invalid(it) },
-        ifRight = { DeviceResponseValidationResult.Valid(it) },
-    )
-
-    private fun deviceResponseValidator(issuerChainInPem: String?): Either<Throwable, DeviceResponseValidator> = Either.catch {
-        deviceResponseValidatorFactory(
-            issuerChainInPem?.let { parsePemEncodedX509Certificates(it).getOrThrow() },
-        )
+        return JsonArray(documents)
     }
+
+    context(_: Raise<ValidationErrorTO>)
+    private fun deviceResponseValidator(issuerChainInPem: String?): DeviceResponseValidator =
+        catch(
+            block = {
+                val chain = issuerChainInPem?.let { parsePemEncodedX509Certificates(it) }
+                deviceResponseValidatorFactory(chain)
+            },
+            catch = { raise(ValidationErrorTO.invalidIssuerChain()) },
+        )
 }
 
 private fun DeviceResponseError.toValidationFailureTO(): ValidationErrorTO =
@@ -186,43 +180,83 @@ private fun DocumentError.toDocumentErrorTO(): DocumentErrorTO =
         is DocumentError.DevicePublicKeyCannotBeParsed -> DocumentErrorTO.DevicePublicKeyCannotBeParsed
         DocumentError.InvalidDeviceSignature -> DocumentErrorTO.InvalidDeviceSignature
         DocumentError.MissingDeviceSigned -> DocumentErrorTO.MissingDeviceSigned
+        is DocumentError.DocumentStatusCheckFailed -> DocumentErrorTO.DocumentStatusCheckFailed
     }
 
-private fun MDoc.toDocumentTO(clock: Clock): DocumentTO = DocumentTO(
-    docType = docType.value,
-    attributes = nameSpaces.associateWith { namespace ->
-        buildJsonObject {
-            getIssuerSignedItems(namespace).map { item ->
-                put(item.elementIdentifier.value, item.elementValue.toJsonElement(clock))
-            }
-        }
-    },
-)
+private fun MDoc.toDocumentTO(clock: Clock): DocumentTO =
+    DocumentTO(
+        docType = docType.value,
+        attributes =
+            nameSpaces.associateWith { namespace ->
+                buildJsonObject {
+                    getIssuerSignedItems(namespace).forEach { item ->
+                        put(item.elementIdentifier.value, item.elementValue.toJsonElement(clock))
+                    }
+                }
+            },
+    )
 
 @OptIn(ExperimentalEncodingApi::class)
 private val base64 = Base64.UrlSafe.withPadding(Base64.PaddingOption.ABSENT_OPTIONAL)
 
 private fun Boolean.toJsonPrimitive() = JsonPrimitive(this)
+
 private fun Number.toJsonPrimitive() = JsonPrimitive(this)
+
 private fun String.toJsonPrimitive() = JsonPrimitive(this)
+
 private fun List<JsonElement>.toJsonArray() = JsonArray(this)
+
 private fun Map<String, JsonElement>.toJsonObject() = JsonObject(this)
 
 @OptIn(ExperimentalEncodingApi::class)
 private fun DataElement.toJsonElement(clock: Clock): JsonElement =
     when (this) {
-        is BooleanElement -> value.toJsonPrimitive()
-        is ByteStringElement -> base64.encode(value).toJsonPrimitive()
-        is DateTimeElement -> value.toEpochMilliseconds().toJsonPrimitive()
-        is EncodedCBORElement -> base64.encode(value).toJsonPrimitive()
-        is FullDateElement -> value.atStartOfDayIn(clock.timeZone()).toEpochMilliseconds().toJsonPrimitive()
-        is ListElement -> value.map { it.toJsonElement(clock) }.toJsonArray()
-        is MapElement -> value.mapKeys { (key, _) -> key.str }.mapValues { (_, value) -> value.toJsonElement(clock) }.toJsonObject()
-        is NullElement -> JsonNull
-        is NumberElement -> value.toJsonPrimitive()
-        is StringElement -> value.toJsonPrimitive()
-        is TDateElement -> value.toEpochMilliseconds().toJsonPrimitive()
+        is BooleanElement -> {
+            value.toJsonPrimitive()
+        }
+
+        is ByteStringElement -> {
+            base64.encode(value).toJsonPrimitive()
+        }
+
+        is DateTimeElement -> {
+            value.toStdlibInstant().toEpochMilliseconds().toJsonPrimitive()
+        }
+
+        is EncodedCBORElement -> {
+            base64.encode(value).toJsonPrimitive()
+        }
+
+        is FullDateElement -> {
+            value.atStartOfDayIn(clock.timeZone()).toEpochMilliseconds().toJsonPrimitive()
+        }
+
+        is ListElement -> {
+            value.map { it.toJsonElement(clock) }.toJsonArray()
+        }
+
+        is MapElement -> {
+            value
+                .mapKeys { (key, _) -> key.str }
+                .mapValues { (_, value) -> value.toJsonElement(clock) }
+                .toJsonObject()
+        }
+
+        is NullElement -> {
+            JsonNull
+        }
+
+        is NumberElement -> {
+            value.toJsonPrimitive()
+        }
+
+        is StringElement -> {
+            value.toJsonPrimitive()
+        }
 
         // Other unsupported DataElements
-        else -> this::class.java.simpleName.toJsonPrimitive()
+        else -> {
+            this::class.java.simpleName.toJsonPrimitive()
+        }
     }
