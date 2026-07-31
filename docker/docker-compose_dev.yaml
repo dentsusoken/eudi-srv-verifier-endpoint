@@ -15,7 +15,7 @@ services:
     environment:
       SPRING_CONFIG_ADDITIONAL_LOCATION: "file:/config/"
       VERIFIER_ACCESS_CERTIFICATE_KEYSTORE: "file:///certs/keystore.jks"
-      VERIFIER_PUBLICURL: "https://localhost"
+      VERIFIER_PUBLICURL: "https://localhost:8443"
     volumes:
       - ../src/main/resources/application-local.properties:/config/application-local.properties:ro
       - ../src/main/resources/keystore.jks:/certs/keystore.jks:ro
@@ -25,7 +25,7 @@ services:
     image: haproxy:2.7.2
     container_name: haproxy-local
     ports:
-      - "443:443"
+      - "8443:443"
     volumes:
       - ./haproxy-local.conf:/usr/local/etc/haproxy/haproxy.cfg
       - ./haproxy.pem:/etc/ssl/certs/mysite.pem

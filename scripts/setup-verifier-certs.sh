@@ -96,19 +96,48 @@ cp "$VTMP/keystore.jks" "$VERIFIER_RESOURCES/keystore.jks"
 echo "  -> $VERIFIER_RESOURCES/keystore.jks"
 
 # ----------------------------------------------------------------
-# 4. application-local.properties を更新
+# 4. Verifier公開鍵をJWKとして書き出し (pre-registered client_id scheme用)
+#     Walletアプリ側の staticPreregisteredClients が実行時にこのJSONを読み込む
+# ----------------------------------------------------------------
+echo "=== Writing verifier public key JWK for wallet pre-registered client ==="
+python3 - "$VTMP/verifier.key" "$WALLET_CERT_DIR/verifier_local_jwk.json" <<'PYEOF'
+import sys, json, base64, subprocess
+
+key_file, out_file = sys.argv[1], sys.argv[2]
+
+result = subprocess.run(
+    ["openssl", "ec", "-in", key_file, "-pubout", "-outform", "DER"],
+    capture_output=True, check=True
+)
+raw_pub = result.stdout[-65:]
+assert raw_pub[0] == 4, "Unexpected EC key format"
+
+def b64url(b):
+    return base64.urlsafe_b64encode(b).rstrip(b"=").decode()
+
+x = b64url(raw_pub[1:33])
+y = b64url(raw_pub[33:65])
+
+jwk = {"kty": "EC", "crv": "P-256", "x": x, "y": y, "use": "sig", "alg": "ES256", "kid": "access_certificate"}
+with open(out_file, "w") as f:
+    json.dump({"keys": [jwk]}, f, indent=2)
+print(f"  -> {out_file}")
+PYEOF
+
+# ----------------------------------------------------------------
+# 5. application-local.properties を更新
 # ----------------------------------------------------------------
 echo "=== Updating application-local.properties ==="
 
 LOCAL_PROPS="$VERIFIER_RESOURCES/application-local.properties"
 cat > "$LOCAL_PROPS" <<EOF
 verifier.originalClientId=localhost
-verifier.clientIdPrefix=x509_san_dns
+verifier.clientIdPrefix=pre-registered
 verifier.access-certificate.signing-algorithm=ES256
 verifier.requestJwt.requestUriMethod=Post
 verifier.allowedRedirectUriSchemes=http,https
 verifier.publicUrl=http://localhost:8080
-verifier.attestation-classifications={"pid":{"vcts":["urn:eudi:pid:1"],"docTypes":["eu.europa.ec.eudi.pid.1"]},"qeaa":{"vcts":[],"docTypes":[]},"pubeaa":{"vcts":[],"docTypes":[]},"eaa":[{"useCase":"academicCredit2024Fall","vcts":["urn:com:dentsusoken:academic_credit:2024:03"],"docTypes":[]},{"useCase":"academicCredit2025Spring","vcts":["urn:com:dentsusoken:academic_credit:2025:01"],"docTypes":[]},{"useCase":"universityStudentId","vcts":["https://jp.ac.example-university/vct/student-id"],"docTypes":[]}]}
+verifier.attestation-classifications={"pid":{"vcts":["urn:eudi:pid:1"],"docTypes":["eu.europa.ec.eudi.pid.1"]},"qeaa":{"vcts":[],"docTypes":[]},"pubeaa":{"vcts":[],"docTypes":[]},"eaa":[{"useCase":"mDL","vcts":[],"docTypes":["org.iso.18013.5.1.mDL"]},{"useCase":"academicCredit2024Fall","vcts":["urn:com:dentsusoken:academic_credit:2024:03"],"docTypes":[]},{"useCase":"academicCredit2025Spring","vcts":["urn:com:dentsusoken:academic_credit:2025:01"],"docTypes":[]},{"useCase":"universityStudentId","vcts":["https://jp.ac.example-university/vct/student-id"],"docTypes":[]}]}
 EOF
 echo "  -> $LOCAL_PROPS"
 
