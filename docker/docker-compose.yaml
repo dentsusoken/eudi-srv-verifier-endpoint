@@ -58,6 +58,7 @@ services:
       VERIFIER_PUBLICURL: "https://localhost"
     volumes:
       - ../src/main/resources/application-local.properties:/config/application-local.properties:ro
+      - ../src/main/resources/application-develop.properties:/config/application-develop.properties:ro
       - ../src/main/resources/keystore.jks:/certs/keystore.jks:ro
 
   verifier-ui-local:
