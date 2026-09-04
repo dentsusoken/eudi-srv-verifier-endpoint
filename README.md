@@ -61,10 +61,17 @@ The released software is a initial development release version:
 
 ## How to build and run
 
-To start the service locally you can execute 
+To start the service locally you can execute
 ```bash
-./gradlew bootRun
+./gradlew bootRun --args='--spring.profiles.active=develop'
 ```
+
+> [!IMPORTANT]
+> The `develop` profile contains development-specific configuration and it is excluded from 
+> the produced JAR and the container image.
+>
+> It can be used **only** for local development.
+
 To build a local docker image of the service execute
 ```bash
 ./gradlew bootBuildImage
@@ -596,7 +603,7 @@ Description: Default `request_uri_method` to use for a Presentation when one is 
 Possible values: `Get`, `Post`  
 Default value: `Get`  
 
-Variable: `VERIFIER_DEFEAULTHTTPRESPONSEMODE`  
+Variable: `VERIFIER_DEFAULTHTTPRESPONSEMODE`  
 Description: How Authorization Responses are expected for HTTP Presentation   
 Possible values: `DirectPost`, `DirectPostJwt`  
 Default value: `DirectPostJwt`
@@ -659,8 +666,8 @@ The supported algorithms are for Issuer data, and MDoc authentication are:
 
 Default value: `true`  
 
-Variable: `VERIFIER_VALIDATION_SDJWTVC_STATUSCHECK_ENABLED`  
-Description: Enables status check validation for sd-jwt-vc attestations shared.  
+Variable: `VERIFIER_VALIDATION_STATUSCHECK_ENABLED`  
+Description: Enables status check validation for attestations shared.  
 Default value: `true`  
 
 Variable: `VERIFIER_TRANSACTIONDATA_HASHALGORITHM`  
